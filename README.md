@@ -4,7 +4,9 @@ Unofficial reusable subagent routing and execution helpers for TanStack AI appli
 
 > Route one prompt into the right bounded specialist fanout, then run those workers with your own TanStack AI models, tools, and profiles.
 
-[▶ Watch the 30s asciinema routing demo](demo/routing-in-action.cast)
+![30s routing demo: deterministic routing to bounded worker fanout](demo/routing-in-action.svg)
+
+[Raw asciinema cast](demo/routing-in-action.cast)
 
 ## Why this exists
 
