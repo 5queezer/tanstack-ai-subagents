@@ -37,6 +37,7 @@ export async function runSubagents<TToolName extends string = string, TTool = un
     maxWorkers: options.maxWorkers,
     profiles: options.profiles,
   })
+  validateToolImplementations(input, options)
 
   const runner = options.runner ?? createModelWorkerRunner(options)
   const workers = await Promise.all(input.workers.map(async (brief) => {
@@ -131,10 +132,20 @@ export function validateRunSubagentsInput<TToolName extends string = string>(
 
 function configuredToolNames<TToolName extends string, TTool, TAdapter>(options: RunSubagentsOptions<TToolName, TTool, TAdapter>) {
   if (!options.tools) return undefined
+  return Object.keys(options.tools) as TToolName[]
+}
 
-  return Object.entries(options.tools)
-    .filter(([, tool]) => tool != null)
-    .map(([name]) => name as TToolName)
+function validateToolImplementations<TToolName extends string, TTool, TAdapter>(
+  input: RunSubagentsInput<TToolName>,
+  options: RunSubagentsOptions<TToolName, TTool, TAdapter>,
+) {
+  if (!options.tools) return
+
+  for (const worker of input.workers) {
+    for (const name of resolveWorkerToolNames(worker, options.profiles)) {
+      if (options.tools[name] == null) throw new Error(`worker tool implementation is missing: ${name}`)
+    }
+  }
 }
 
 async function callLifecycle(callback: () => void | Promise<void>) {

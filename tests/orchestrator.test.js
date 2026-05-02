@@ -107,7 +107,7 @@ test('rejects nullish tool implementations before workers run', async () => {
         return { name: brief.name, status: 'completed', output: 'should not run' }
       },
     }),
-    /workers\[0\] requested disallowed tool: missing_tool/,
+    /worker tool implementation is missing: missing_tool/,
   )
 
   assert.equal(workerRan, false)
