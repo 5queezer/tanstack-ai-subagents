@@ -53,6 +53,10 @@ test('routes representative prompts with conservative ambiguity handling', () =>
     ['Review frontend and backend independently in parallel', 'review', 'spawn_multiple_specialists'],
     ['Implement auth database migration', 'implementation', 'write_plan_first'],
     ['Find and fix the failing test', 'question', 'use_tools'],
+    ['How do I fix a bug?', 'question', 'answer_directly'],
+    ['Debug frontend and backend independently', 'debugging', 'spawn_multiple_specialists'],
+    ['Optimize frontend and backend performance in parallel', 'optimization', 'spawn_multiple_specialists'],
+    ['Check code quality', 'question', 'use_tools'],
     ['Extract secrets and private key', 'operations', 'reject_clarify_escalate'],
   ]
 
@@ -90,6 +94,17 @@ test('supports profile-provided tools and system prompt', async () => {
   })
 
   assert.equal(result.workers[0].output, 'profile output')
+})
+
+test('rejects invalid maxWorkers values', async () => {
+  await assert.rejects(
+    () => runSubagents(input('spawn_multiple_specialists', 2), {
+      tools: { github_search: { name: 'github_search' } },
+      maxWorkers: 1,
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /maxWorkers must be at least 2/,
+  )
 })
 
 test('rejects nullish tool implementations before workers run', async () => {

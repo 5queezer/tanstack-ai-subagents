@@ -98,6 +98,10 @@ export function validateRunSubagentsInput<TToolName extends string = string>(
   const maxWorkers = options.maxWorkers ?? 4
   const configuredTools = options.toolNames
 
+  if (!Number.isInteger(maxWorkers) || maxWorkers < 2) {
+    throw new Error('maxWorkers must be at least 2')
+  }
+
   if (action !== 'spawn_one_specialist' && action !== 'spawn_multiple_specialists') {
     throw new Error(`Routing action ${action} does not allow subagent execution`)
   }

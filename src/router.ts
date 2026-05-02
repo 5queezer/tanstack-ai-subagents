@@ -8,9 +8,9 @@ type IntentScore = {
 }
 
 const intentTerms: Record<Intent, readonly string[]> = {
-  research: ['search', 'find', 'github', 'issue', 'issues', 'pr', 'pull request', 'code', 'file', 'files', 'comment', 'comments', 'status', 'check', 'checks', 'ci', 'workflow'],
+  research: ['search', 'find', 'github', 'issue', 'issues', 'pr', 'pull request', 'code', 'file', 'files', 'comment', 'comments', 'status', 'ci', 'workflow'],
   implementation: ['implement', 'build', 'add', 'create', 'modify', 'refactor', 'change', 'migrate', 'deploy'],
-  review: ['review', 'audit', 'inspect', 'critique'],
+  review: ['review', 'audit', 'inspect', 'critique', 'quality'],
   debugging: ['debug', 'fix', 'bug', 'failing', 'error', 'regression'],
   optimization: ['optimize', 'optimise', 'performance', 'bundle', 'latency', 'speed', 'benchmark'],
 }
@@ -35,7 +35,7 @@ export function routeSubagentRequest(prompt: string): SubagentRoutingNote {
     return note('operations', 'high', 'multi-domain', 'low', 'high', 'high', 'reject_clarify_escalate', 'Prompt is unsafe, privacy-sensitive, or asks to bypass permissions.', 'Refuse unsafe action or ask for a safe, bounded read-only request.')
   }
 
-  if (simpleQuestion && !top) {
+  if (simpleQuestion && scoreFor(scores, 'research') === 0 && !highRisk && !multiArea) {
     return note('question', 'low', 'single-domain', 'low', 'low', 'low', 'answer_directly', 'Prompt is a simple low-risk question that does not need tools or delegation.', 'Answer directly and mention uncertainty if relevant.')
   }
 
@@ -43,8 +43,8 @@ export function routeSubagentRequest(prompt: string): SubagentRoutingNote {
     return note('question', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', 'use_tools', 'Prompt intent is ambiguous; use tools conservatively instead of forcing a specialist route.', 'Gather evidence with available tools, then decide whether planning or specialist execution is warranted.')
   }
 
-  if (top.intent === 'review' && parallel && multiArea) {
-    return note('review', 'high', 'multi-domain', 'high', 'medium', 'medium', 'spawn_multiple_specialists', 'Review work is separable across domains, so independent specialists can reduce latency and blind spots.', 'Each specialist returns findings; one integrator deduplicates, validates, and decides next steps.')
+  if ((top.intent === 'review' || top.intent === 'debugging' || top.intent === 'optimization') && parallel && multiArea) {
+    return note(top.intent, 'high', 'multi-domain', 'high', 'medium', 'medium', 'spawn_multiple_specialists', 'Work is separable across domains, so independent specialists can reduce latency and blind spots.', 'Each specialist returns findings; one integrator deduplicates, validates, and decides next steps.')
   }
 
   if (top.intent === 'implementation' && (highRisk || multiArea)) {
