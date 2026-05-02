@@ -13,7 +13,7 @@ export const subagentActionSchema = z.enum([
 ])
 
 export const subagentRoutingNoteSchema = z.object({
-  promptClass: z.enum(['question', 'research', 'implementation', 'review', 'debugging', 'optimization', 'operations']),
+  promptClass: z.string().min(1),
   complexity: routingLevelSchema,
   domainBreadth: z.enum(['single-domain', 'multi-domain']),
   subtaskIndependence: routingLevelSchema,

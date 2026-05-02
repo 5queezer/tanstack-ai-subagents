@@ -1,12 +1,13 @@
 import { toolDefinition } from '@tanstack/ai'
 
 import { runSubagents, type RunSubagentsOptions } from './orchestrator.js'
-import { routeSubagentRequest } from './router.js'
+import { routeSubagentRequest, type SubagentRouter } from './router.js'
 import { runSubagentsInputSchema, subagentRouteInputSchema } from './schemas.js'
 import type { RunSubagentsToolInput, SubagentRouteInput } from './schemas.js'
 import type { RunSubagentsInput, TraceFunction } from './types.js'
 
 export type CreateSubagentRouterToolOptions = {
+  router?: SubagentRouter
   trace?: TraceFunction
 }
 
@@ -23,7 +24,7 @@ export function createSubagentRouterTool(options: CreateSubagentRouterToolOption
 
   const tool = definition.server(async (args) => {
     const input = args as SubagentRouteInput
-    const run = async () => routeSubagentRequest(input.prompt)
+    const run = async () => (options.router ?? routeSubagentRequest)(input.prompt)
     return options.trace ? options.trace('route_subagents', input, run) : run()
   })
 

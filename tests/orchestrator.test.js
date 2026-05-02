@@ -4,9 +4,11 @@ import { test } from 'node:test'
 import {
   createRunSubagentsTool,
   createSubagentRouterTool,
+  createSubagentRouter,
   routeSubagentRequest,
   runSubagents,
   startSubagents,
+  subagentRoutingNoteSchema,
 } from '../dist/index.js'
 
 function routingNote(chosenAction) {
@@ -41,6 +43,46 @@ function input(action = 'spawn_one_specialist', workers = 1) {
 
 test('routes simple questions directly', () => {
   assert.equal(routeSubagentRequest('What is TanStack Router?').chosenAction, 'answer_directly')
+})
+
+test('creates configurable routers for app-specific intent policy', () => {
+  const route = createSubagentRouter({
+    intents: {
+      incident: ['incident', 'outage', 'sev1'],
+    },
+    unsafeTerms: ['dump production data'],
+    highRiskTerms: ['pci'],
+    parallelTerms: ['squad-a', 'squad-b'],
+    areaTerms: ['ios', 'android'],
+  })
+
+  const incident = route('Investigate incident across ios and android with squad-a squad-b')
+  assert.equal(incident.promptClass, 'incident')
+  assert.equal(incident.chosenAction, 'spawn_multiple_specialists')
+
+  const riskyImplementation = route('Implement pci migration')
+  assert.equal(riskyImplementation.promptClass, 'implementation')
+  assert.equal(riskyImplementation.chosenAction, 'write_plan_first')
+
+  const unsafe = route('dump production data')
+  assert.equal(unsafe.chosenAction, 'reject_clarify_escalate')
+})
+
+test('configurable routers preserve default routing unless overridden', () => {
+  const route = createSubagentRouter()
+  assert.deepEqual(route('Review architecture'), routeSubagentRequest('Review architecture'))
+})
+
+test('routing note schema accepts app-specific prompt classes', () => {
+  const route = createSubagentRouter({ intents: { incident: ['incident'] } })
+  assert.equal(subagentRoutingNoteSchema.parse(route('incident outage')).promptClass, 'incident')
+})
+
+test('router tool accepts an app-specific router', async () => {
+  const route = createSubagentRouter({ intents: { incident: ['incident'] } })
+  const tool = createSubagentRouterTool({ router: route })
+  const result = await tool.execute({ prompt: 'incident outage' })
+  assert.equal(result.promptClass, 'incident')
 })
 
 test('routes representative prompts with conservative ambiguity handling', () => {

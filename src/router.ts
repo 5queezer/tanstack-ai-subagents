@@ -1,74 +1,110 @@
 import type { RoutingLevel, SubagentAction, SubagentRoutingNote } from './types.js'
 
-type Intent = Exclude<SubagentRoutingNote['promptClass'], 'question' | 'operations'>
-
 type IntentScore = {
-  intent: Intent
+  intent: string
   score: number
 }
 
-const intentTerms: Record<Intent, readonly string[]> = {
+export type SubagentRouter = (prompt: string) => SubagentRoutingNote
+
+export type SubagentRouterConfig = {
+  intents?: Record<string, readonly string[]>
+  unsafeTerms?: readonly string[]
+  highRiskTerms?: readonly string[]
+  parallelTerms?: readonly string[]
+  areaTerms?: readonly string[]
+  ambiguousMargin?: number
+  fallbackAction?: Extract<SubagentAction, 'use_tools' | 'answer_directly' | 'reject_clarify_escalate'>
+}
+
+const defaultIntentTerms = {
   research: ['search', 'find', 'github', 'issue', 'issues', 'pr', 'pull request', 'code', 'file', 'files', 'comment', 'comments', 'status', 'ci', 'workflow'],
   implementation: ['implement', 'build', 'add', 'create', 'modify', 'refactor', 'change', 'migrate', 'deploy'],
   review: ['review', 'audit', 'inspect', 'critique', 'quality'],
   debugging: ['debug', 'fix', 'bug', 'failing', 'error', 'regression'],
   optimization: ['optimize', 'optimise', 'performance', 'bundle', 'latency', 'speed', 'benchmark'],
-}
+} satisfies Record<string, readonly string[]>
 
-const unsafeTerms = ['secret', 'token', 'credential', 'password', 'bypass', 'exfiltrate', 'extract secrets', 'private key']
-const highRiskTerms = ['auth', 'authentication', 'database', 'migration', 'deploy', 'production', 'permission', 'permissions', 'security', 'payment', 'billing']
-const parallelTerms = ['parallel', 'independent', 'separate', 'multiple', 'several']
-const areaTerms = ['frontend', 'ui', 'client', 'backend', 'server', 'api', 'database', 'auth', 'tests', 'test']
+const defaultUnsafeTerms = ['secret', 'token', 'credential', 'password', 'bypass', 'exfiltrate', 'extract secrets', 'private key']
+const defaultHighRiskTerms = ['auth', 'authentication', 'database', 'migration', 'deploy', 'production', 'permission', 'permissions', 'security', 'payment', 'billing']
+const defaultParallelTerms = ['parallel', 'independent', 'separate', 'multiple', 'several']
+const defaultAreaTerms = ['frontend', 'ui', 'client', 'backend', 'server', 'api', 'database', 'auth', 'tests', 'test']
 
 export function routeSubagentRequest(prompt: string): SubagentRoutingNote {
-  const text = normalize(prompt)
-  const scores = scoreIntents(text)
-  const unsafe = hasAnyTerm(text, unsafeTerms)
-  const highRisk = hasAnyTerm(text, highRiskTerms)
-  const parallel = hasAnyTerm(text, parallelTerms) || hasOrderedPair(text, ['frontend', 'backend']) || hasOrderedPair(text, ['backend', 'frontend'])
-  const multiArea = countDistinctTerms(text, areaTerms) >= 2 || hasOrderedPair(text, ['frontend', 'backend']) || hasOrderedPair(text, ['backend', 'frontend'])
-  const simpleQuestion = /^(what|who|when|where|why|how)\b/.test(text) && text.length < 120 && scoreFor(scores, 'implementation') === 0 && scoreFor(scores, 'review') === 0
-  const top = topIntent(scores)
-  const ambiguous = isAmbiguous(scores)
+  return createSubagentRouter()(prompt)
+}
 
-  if (unsafe) {
-    return note('operations', 'high', 'multi-domain', 'low', 'high', 'high', 'reject_clarify_escalate', 'Prompt is unsafe, privacy-sensitive, or asks to bypass permissions.', 'Refuse unsafe action or ask for a safe, bounded read-only request.')
+export function createSubagentRouter(config: SubagentRouterConfig = {}): SubagentRouter {
+  const intents = mergeTerms(defaultIntentTerms, config.intents)
+  const unsafeTerms = [...defaultUnsafeTerms, ...(config.unsafeTerms ?? [])]
+  const highRiskTerms = [...defaultHighRiskTerms, ...(config.highRiskTerms ?? [])]
+  const parallelTerms = [...defaultParallelTerms, ...(config.parallelTerms ?? [])]
+  const areaTerms = [...defaultAreaTerms, ...(config.areaTerms ?? [])]
+  const ambiguousMargin = config.ambiguousMargin ?? 1
+  const fallbackAction = config.fallbackAction ?? 'use_tools'
+
+  return (prompt: string): SubagentRoutingNote => {
+    const text = normalize(prompt)
+    const scores = scoreIntents(text, intents)
+    const unsafe = hasAnyTerm(text, unsafeTerms)
+    const highRisk = hasAnyTerm(text, highRiskTerms)
+    const parallel = hasAnyTerm(text, parallelTerms) || hasOrderedPair(text, ['frontend', 'backend']) || hasOrderedPair(text, ['backend', 'frontend'])
+    const multiArea = countDistinctTerms(text, areaTerms) >= 2 || hasOrderedPair(text, ['frontend', 'backend']) || hasOrderedPair(text, ['backend', 'frontend'])
+    const simpleQuestion = /^(what|who|when|where|why|how)\b/.test(text) && text.length < 120 && scoreFor(scores, 'implementation') === 0 && scoreFor(scores, 'review') === 0
+    const top = topIntent(scores)
+    const ambiguous = isAmbiguous(scores, ambiguousMargin)
+
+    if (unsafe) {
+      return note('operations', 'high', 'multi-domain', 'low', 'high', 'high', 'reject_clarify_escalate', 'Prompt is unsafe, privacy-sensitive, or asks to bypass permissions.', 'Refuse unsafe action or ask for a safe, bounded read-only request.')
+    }
+
+    if (simpleQuestion && scoreFor(scores, 'research') === 0 && !highRisk && !multiArea) {
+      return note('question', 'low', 'single-domain', 'low', 'low', 'low', 'answer_directly', 'Prompt is a simple low-risk question that does not need tools or delegation.', 'Answer directly and mention uncertainty if relevant.')
+    }
+
+    if (!top || ambiguous) {
+      return note('question', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', fallbackAction, 'Prompt intent is ambiguous; use tools conservatively instead of forcing a specialist route.', 'Gather evidence with available tools, then decide whether planning or specialist execution is warranted.')
+    }
+
+    if (isParallelSpecialistIntent(top.intent) && parallel && multiArea) {
+      return note(top.intent, 'high', 'multi-domain', 'high', 'medium', 'medium', 'spawn_multiple_specialists', 'Work is separable across domains, so independent specialists can reduce latency and blind spots.', 'Each specialist returns findings; one integrator deduplicates, validates, and decides next steps.')
+    }
+
+    if (top.intent === 'implementation' && (highRisk || multiArea)) {
+      return note('implementation', 'high', multiArea ? 'multi-domain' : 'single-domain', 'medium', 'high', highRisk ? 'high' : 'medium', 'write_plan_first', 'Implementation is multi-step or high-risk; write a plan before spawning or editing.', 'Plan lists files, tests, validation commands, and integration owner before execution.')
+    }
+
+    if (top.intent === 'research') {
+      return note('research', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', 'use_tools', 'Focused research is best handled by the current agent using read-only tools.', 'Cite retrieved sources or GitHub URLs and summarize relevant evidence.')
+    }
+
+    if (isParallelSpecialistIntent(top.intent) && !parallel) {
+      return note(top.intent, 'medium', multiArea ? 'multi-domain' : 'single-domain', 'medium', 'medium', 'low', 'spawn_one_specialist', 'A bounded specialist can inspect this task independently without multi-agent fanout.', 'Specialist returns concise findings with evidence and validation commands.')
+    }
+
+    return note('question', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', fallbackAction, 'Default to one agent with tools unless delegation has clear expected value.', 'Use available tools as needed and provide a concise answer with evidence.')
   }
+}
 
-  if (simpleQuestion && scoreFor(scores, 'research') === 0 && !highRisk && !multiArea) {
-    return note('question', 'low', 'single-domain', 'low', 'low', 'low', 'answer_directly', 'Prompt is a simple low-risk question that does not need tools or delegation.', 'Answer directly and mention uncertainty if relevant.')
+function mergeTerms(base: Record<string, readonly string[]>, overrides?: Record<string, readonly string[]>) {
+  const merged: Record<string, readonly string[]> = { ...base }
+  for (const [intent, terms] of Object.entries(overrides ?? {})) {
+    merged[intent] = [...(merged[intent] ?? []), ...terms]
   }
+  return merged
+}
 
-  if (!top || ambiguous) {
-    return note('question', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', 'use_tools', 'Prompt intent is ambiguous; use tools conservatively instead of forcing a specialist route.', 'Gather evidence with available tools, then decide whether planning or specialist execution is warranted.')
-  }
-
-  if ((top.intent === 'review' || top.intent === 'debugging' || top.intent === 'optimization') && parallel && multiArea) {
-    return note(top.intent, 'high', 'multi-domain', 'high', 'medium', 'medium', 'spawn_multiple_specialists', 'Work is separable across domains, so independent specialists can reduce latency and blind spots.', 'Each specialist returns findings; one integrator deduplicates, validates, and decides next steps.')
-  }
-
-  if (top.intent === 'implementation' && (highRisk || multiArea)) {
-    return note('implementation', 'high', multiArea ? 'multi-domain' : 'single-domain', 'medium', 'high', highRisk ? 'high' : 'medium', 'write_plan_first', 'Implementation is multi-step or high-risk; write a plan before spawning or editing.', 'Plan lists files, tests, validation commands, and integration owner before execution.')
-  }
-
-  if (top.intent === 'research') {
-    return note('research', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', 'use_tools', 'Focused research is best handled by the current agent using read-only tools.', 'Cite retrieved sources or GitHub URLs and summarize relevant evidence.')
-  }
-
-  if ((top.intent === 'review' || top.intent === 'debugging' || top.intent === 'optimization') && !parallel) {
-    return note(top.intent, 'medium', multiArea ? 'multi-domain' : 'single-domain', 'medium', 'medium', 'low', 'spawn_one_specialist', 'A bounded specialist can inspect this task independently without multi-agent fanout.', 'Specialist returns concise findings with evidence and validation commands.')
-  }
-
-  return note('question', 'medium', multiArea ? 'multi-domain' : 'single-domain', 'low', 'medium', 'low', 'use_tools', 'Default to one agent with tools unless delegation has clear expected value.', 'Use available tools as needed and provide a concise answer with evidence.')
+function isParallelSpecialistIntent(intent: string) {
+  return intent === 'review' || intent === 'debugging' || intent === 'optimization' || !Object.hasOwn(defaultIntentTerms, intent)
 }
 
 function normalize(prompt: string) {
   return prompt.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function scoreIntents(text: string): IntentScore[] {
+function scoreIntents(text: string, intentTerms: Record<string, readonly string[]>): IntentScore[] {
   return Object.entries(intentTerms).map(([intent, terms]) => ({
-    intent: intent as Intent,
+    intent,
     score: countDistinctTerms(text, terms),
   }))
 }
@@ -78,7 +114,7 @@ function topIntent(scores: IntentScore[]) {
   return ranked[0]
 }
 
-function isAmbiguous(scores: IntentScore[]) {
+function isAmbiguous(scores: IntentScore[], ambiguousMargin: number) {
   const ranked = scores.filter((score) => score.score > 0).sort((a, b) => b.score - a.score)
   if (ranked.length < 2) return false
 
@@ -87,10 +123,10 @@ function isAmbiguous(scores: IntentScore[]) {
   if (first.score === second.score) return true
 
   const activeIntents = new Set(ranked.map((score) => score.intent))
-  return activeIntents.has('research') && activeIntents.has('debugging') && first.score - second.score <= 1
+  return activeIntents.has('research') && activeIntents.has('debugging') && first.score - second.score <= ambiguousMargin
 }
 
-function scoreFor(scores: IntentScore[], intent: Intent) {
+function scoreFor(scores: IntentScore[], intent: string) {
   return scores.find((score) => score.intent === intent)?.score ?? 0
 }
 
@@ -115,7 +151,7 @@ function escapeRegExp(value: string) {
 }
 
 function note(
-  promptClass: SubagentRoutingNote['promptClass'],
+  promptClass: SubagentRoutingNote['promptClass'] | string,
   complexity: RoutingLevel,
   domainBreadth: SubagentRoutingNote['domainBreadth'],
   subtaskIndependence: RoutingLevel,

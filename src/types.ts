@@ -9,7 +9,7 @@ export type SubagentAction =
   | 'reject_clarify_escalate'
 
 export type SubagentRoutingNote = {
-  promptClass: 'question' | 'research' | 'implementation' | 'review' | 'debugging' | 'optimization' | 'operations'
+  promptClass: string
   complexity: RoutingLevel
   domainBreadth: 'single-domain' | 'multi-domain'
   subtaskIndependence: RoutingLevel

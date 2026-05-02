@@ -2,6 +2,48 @@
 
 Unofficial reusable subagent routing and execution helpers for TanStack AI applications.
 
+> Route one prompt into the right bounded specialist fanout, then run those workers with your own TanStack AI models, tools, and profiles.
+
+[▶ Watch the 30s asciinema routing demo](demo/routing-in-action.cast)
+
+## Why this exists
+
+TanStack AI gives you the primitives for models and tools. This package adds the orchestration layer most apps need when one assistant becomes multiple focused workers.
+
+The core opinion: **LLM-as-router is the wrong default for finite routing decisions.** Routing should be fast, deterministic, cheap, and testable. The LLM should do specialist work, not spend tokens deciding which specialist should run.
+
+## The routing bet
+
+Most agent frameworks use another LLM call as the router. This package does not.
+
+For subagent dispatch, the output space is usually finite: refuse, use tools, spawn one specialist, or spawn multiple specialists. That makes routing a classification problem, not a reasoning problem.
+
+`@5queezer/tanstack-ai-subagents` uses deterministic intent scoring by default:
+
+- **microsecond routing** instead of another model round-trip
+- **no extra tokens** just to pick a worker
+- **repeatable decisions** across runs, CI, and provider model updates
+- **debuggable routing rules** you can read, test, and change
+
+Ambiguous prompts fall back to `use_tools`, so your app can decide whether to escalate to an LLM router, ask a clarifying question, or handle the request directly.
+
+> Use LLMs for work that needs reasoning. Use score-based routing when the route set is known.
+
+## What you get
+
+- `routeSubagentRequest(...)` turns user intent into a deterministic routing note.
+- `createSubagentRouter(...)` lets apps extend the intent vocabulary, risk terms, ambiguity policy, and fallback action.
+- `createSubagentRouterTool(...)` and `createRunSubagentsTool(...)` expose routing and execution as TanStack AI tools.
+- Your app still owns concrete tools, provider adapters, worker profiles, tracing, persistence, prompts, and UI.
+
+## Why not an LLM router?
+
+| Router style | Best for | Tradeoff |
+| --- | --- | --- |
+| Score-based routing | Known intent space, 5-20 workers, production paths | Requires maintaining scoring rules |
+| LLM routing | Open-ended intents, discovery, hundreds of possible agents | Adds latency, cost, nondeterminism, and harder debugging |
+| Hybrid | Production default | Deterministic for confident cases, app fallback for ambiguity |
+
 ## Features
 
 - Deterministic score-based subagent routing with `routeSubagentRequest(...)`
@@ -112,6 +154,38 @@ A worker can then use `profile: 'verify'` instead of listing `toolNames` directl
 
 `routeSubagentRequest(...)` uses deterministic, dependency-free intent scoring rather than first-match regex routing. It scores clear intent groups, treats unsafe prompts as highest priority, and falls back to `use_tools` when intent is ambiguous instead of forcing a specialist route.
 
+Use `createSubagentRouter(...)` when your app has its own domain vocabulary or routing policy:
+
+```ts
+const route = createSubagentRouter({
+  intents: {
+    incident: ['incident', 'outage', 'sev1'],
+    security: ['oauth', 'permission', 'vulnerability'],
+  },
+  highRiskTerms: ['pci', 'production database'],
+  parallelTerms: ['ios', 'android'],
+  areaTerms: ['frontend', 'backend', 'mobile'],
+})
+
+const routingNote = route('Investigate sev1 across ios and android')
+```
+
+The TanStack router tool can use the same app-specific router:
+
+```ts
+createSubagentRouterTool({ router: route })
+```
+
+Keep environment policy in your app instead of the package core:
+
+```ts
+const route = createSubagentRouter(
+  process.env.SUBAGENTS_ROUTER_POLICY === 'incidents'
+    ? incidentRoutingPolicy
+    : undefined,
+)
+```
+
 ### Worker limits
 
 - `spawn_one_specialist` requires exactly one worker.
@@ -154,6 +228,7 @@ The handle status is updated to `completed` or `failed` when the result promise 
 ## API
 
 ```ts
+createSubagentRouter(config?)
 createSubagentRouterTool(options?)
 createRunSubagentsTool(options)
 routeSubagentRequest(prompt)
@@ -166,6 +241,8 @@ Key exported types include:
 
 ```ts
 SubagentAction
+SubagentRouter
+SubagentRouterConfig
 SubagentRoutingNote
 SubagentWorkerBrief
 SubagentWorkerResult
