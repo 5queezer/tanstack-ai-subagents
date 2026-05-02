@@ -4,7 +4,7 @@ Unofficial reusable subagent routing and execution helpers for TanStack AI appli
 
 ## Features
 
-- Deterministic subagent routing with `routeSubagentRequest(...)`
+- Deterministic score-based subagent routing with `routeSubagentRequest(...)`
 - TanStack AI tool factories for `route_subagents` and `run_subagents`
 - Bounded worker validation and fanout
 - Consumer-defined tool registries and profiles
@@ -107,6 +107,10 @@ const profiles = {
 ```
 
 A worker can then use `profile: 'verify'` instead of listing `toolNames` directly.
+
+### Routing behavior
+
+`routeSubagentRequest(...)` uses deterministic, dependency-free intent scoring rather than first-match regex routing. It scores clear intent groups, treats unsafe prompts as highest priority, and falls back to `use_tools` when intent is ambiguous instead of forcing a specialist route.
 
 ### Worker limits
 

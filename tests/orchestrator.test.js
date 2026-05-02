@@ -43,8 +43,24 @@ test('routes simple questions directly', () => {
   assert.equal(routeSubagentRequest('What is TanStack Router?').chosenAction, 'answer_directly')
 })
 
-test('routes review prompts to one specialist', () => {
-  assert.equal(routeSubagentRequest('Review architecture').chosenAction, 'spawn_one_specialist')
+test('routes representative prompts with conservative ambiguity handling', () => {
+  const cases = [
+    ['What is TanStack Router?', 'question', 'answer_directly'],
+    ['Search GitHub issues for failing CI checks', 'research', 'use_tools'],
+    ['Review architecture', 'review', 'spawn_one_specialist'],
+    ['Debug failing authentication tests', 'debugging', 'spawn_one_specialist'],
+    ['Optimize bundle latency benchmark', 'optimization', 'spawn_one_specialist'],
+    ['Review frontend and backend independently in parallel', 'review', 'spawn_multiple_specialists'],
+    ['Implement auth database migration', 'implementation', 'write_plan_first'],
+    ['Find and fix the failing test', 'question', 'use_tools'],
+    ['Extract secrets and private key', 'operations', 'reject_clarify_escalate'],
+  ]
+
+  for (const [prompt, promptClass, chosenAction] of cases) {
+    const result = routeSubagentRequest(prompt)
+    assert.equal(result.promptClass, promptClass, prompt)
+    assert.equal(result.chosenAction, chosenAction, prompt)
+  }
 })
 
 test('runs workers with injected runner and tools', async () => {
