@@ -43,6 +43,10 @@ test('routes simple questions directly', () => {
   assert.equal(routeSubagentRequest('What is TanStack Router?').chosenAction, 'answer_directly')
 })
 
+test('routes review prompts to one specialist', () => {
+  assert.equal(routeSubagentRequest('Review architecture').chosenAction, 'spawn_one_specialist')
+})
+
 test('runs workers with injected runner and tools', async () => {
   const result = await runSubagents(input('spawn_multiple_specialists', 2), {
     tools: { github_search: { name: 'github_search' } },

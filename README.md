@@ -58,10 +58,10 @@ export const serverTools = [
   }),
 ]
 
-const routingNote = routeSubagentRequest('Review this branch')
+const routingNote = routeSubagentRequest('Review architecture')
 
 const handle = startSubagents({
-  originalPrompt: 'Review this branch',
+  originalPrompt: 'Review architecture',
   model: 'provider/model',
   routingNote,
   workers: [{

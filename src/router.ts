@@ -3,7 +3,7 @@ import type { RoutingLevel, SubagentAction, SubagentRoutingNote } from './types.
 export function routeSubagentRequest(prompt: string): SubagentRoutingNote {
   const text = prompt.toLowerCase()
   const unsafe = /\b(secret|token|credential|password|bypass|exfiltrate|extract secrets|private key)\b/.test(text)
-  const research = /\b(search|find|github|issue|issues|pr|pull request|code|file|files|comments?|reviews?|status|checks?|ci|workflow)\b/.test(text)
+  const research = /\b(search|find|github|issue|issues|pr|pull request|code|file|files|comments?|status|checks?|ci|workflow)\b/.test(text)
   const implementation = /\b(implement|build|add|create|modify|refactor|change|migrate|deploy|database|auth|authentication)\b/.test(text)
   const review = /\b(review|audit|inspect|critique|check)\b/.test(text)
   const debugging = /\b(debug|fix|bug|failing|error|regression)\b/.test(text)
