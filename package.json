@@ -1,0 +1,45 @@
+{
+  "name": "@tanstack/ai-subagents",
+  "version": "0.1.0",
+  "description": "Reusable subagent routing and execution helpers for TanStack AI applications.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "tanstack",
+    "ai",
+    "agents",
+    "subagents",
+    "orchestration"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@tanstack/ai": "^0.14.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@tanstack/ai": "^0.14.0",
+    "typescript": "latest",
+    "zod": "^4.4.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
