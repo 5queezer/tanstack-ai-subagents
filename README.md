@@ -1,6 +1,6 @@
-# @tanstack/ai-subagents
+# @5queezer/tanstack-ai-subagents
 
-Reusable subagent routing and execution helpers for TanStack AI applications.
+Unofficial reusable subagent routing and execution helpers for TanStack AI applications.
 
 ## Features
 
@@ -15,10 +15,10 @@ Reusable subagent routing and execution helpers for TanStack AI applications.
 ## Install
 
 ```bash
-npm install @tanstack/ai-subagents @tanstack/ai zod
+npm install @5queezer/tanstack-ai-subagents @tanstack/ai zod
 ```
 
-`@tanstack/ai` and `zod` are peer dependencies.
+`@tanstack/ai` and `zod` are peer dependencies. This package is not an official TanStack package.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ import {
   createSubagentRouterTool,
   routeSubagentRequest,
   startSubagents,
-} from '@tanstack/ai-subagents'
+} from '@5queezer/tanstack-ai-subagents'
 
 import { getChatModel } from './ai-provider'
 import { githubGet, githubSearch } from './tools'
@@ -90,7 +90,7 @@ const tools = {
 }
 ```
 
-If a worker requests a tool that is not configured, validation fails before the worker runs.
+If a worker requests a tool that is not configured, or maps to a nullish implementation, validation fails before the worker runs.
 
 ### Profiles
 

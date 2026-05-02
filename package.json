@@ -1,7 +1,7 @@
 {
-  "name": "@tanstack/ai-subagents",
+  "name": "@5queezer/tanstack-ai-subagents",
   "version": "0.1.0",
-  "description": "Reusable subagent routing and execution helpers for TanStack AI applications.",
+  "description": "Unofficial reusable subagent routing and execution helpers for TanStack AI applications.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,14 +29,27 @@
     "subagents",
     "orchestration"
   ],
+  "author": "5queezer",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/5queezer/tanstack-ai-subagents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/5queezer/tanstack-ai-subagents/issues"
+  },
+  "homepage": "https://github.com/5queezer/tanstack-ai-subagents#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
   "peerDependencies": {
     "@tanstack/ai": "^0.14.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@tanstack/ai": "^0.14.0",
-    "typescript": "latest",
+    "typescript": "^6.0.3",
     "zod": "^4.4.1"
   },
   "publishConfig": {

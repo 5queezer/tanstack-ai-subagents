@@ -130,8 +130,11 @@ export function validateRunSubagentsInput<TToolName extends string = string>(
 }
 
 function configuredToolNames<TToolName extends string, TTool, TAdapter>(options: RunSubagentsOptions<TToolName, TTool, TAdapter>) {
-  if (options.tools) return Object.keys(options.tools) as TToolName[]
-  return undefined
+  if (!options.tools) return undefined
+
+  return Object.entries(options.tools)
+    .filter(([, tool]) => tool != null)
+    .map(([name]) => name as TToolName)
 }
 
 async function callLifecycle(callback: () => void | Promise<void>) {

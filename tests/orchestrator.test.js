@@ -72,18 +72,25 @@ test('supports profile-provided tools and system prompt', async () => {
   assert.equal(result.workers[0].output, 'profile output')
 })
 
-test('reports missing tool implementations as worker failures', async () => {
+test('rejects nullish tool implementations before workers run', async () => {
   const request = input()
   request.workers[0].toolNames = ['missing_tool']
+  let workerRan = false
 
-  const result = await runSubagents(request, {
-    chat: async () => 'should not run',
-    getAdapter: (model) => model,
-    tools: { missing_tool: undefined },
-  })
+  await assert.rejects(
+    () => runSubagents(request, {
+      chat: async () => 'should not run',
+      getAdapter: (model) => model,
+      tools: { missing_tool: undefined },
+      runner: async (brief) => {
+        workerRan = true
+        return { name: brief.name, status: 'completed', output: 'should not run' }
+      },
+    }),
+    /workers\[0\] requested disallowed tool: missing_tool/,
+  )
 
-  assert.equal(result.workers[0].status, 'failed')
-  assert.match(result.workers[0].error, /missing_tool/)
+  assert.equal(workerRan, false)
 })
 
 test('creates TanStack AI tools', () => {
