@@ -134,6 +134,19 @@ createRunSubagentsTool({
 })
 ```
 
+### Background runs
+
+`startSubagents(...)` starts the same orchestration as `runSubagents(...)` but returns a handle immediately:
+
+```ts
+const handle = startSubagents(input, options)
+
+console.log(handle.runId, handle.status)
+const result = await handle.result
+```
+
+The handle status is updated to `completed` or `failed` when the result promise settles.
+
 ## API
 
 ```ts
@@ -160,52 +173,8 @@ SubagentRunHandle
 SubagentToolRegistry
 ```
 
-## Publishing
+## Design boundaries
 
-Publish from this package root.
+This package owns routing, validation, bounded fanout, partial failure handling, lifecycle callbacks, background run handles, profile resolution, and TanStack AI tool factories.
 
-### Prerequisites
-
-1. Create or use an npm account at <https://www.npmjs.com>.
-2. Enable 2FA or create a granular npm access token.
-3. Log in locally:
-
-```bash
-npm login
-```
-
-4. Confirm you have publish rights for the `@tanstack` scope.
-
-### Validate package contents
-
-```bash
-npm test
-npm run typecheck
-npm run build
-npm pack --dry-run
-```
-
-Check `npm pack --dry-run` carefully before publishing. The package should include `dist`, `README.md`, `LICENSE`, and `package.json`; it should not include secrets, local config, source app files, or unrelated tests.
-
-### Publish
-
-```bash
-npm publish --access public
-```
-
-Verify the package at:
-
-```text
-https://www.npmjs.com/package/@tanstack/ai-subagents
-```
-
-### Release updates
-
-npm versions are immutable. Bump semver before each release:
-
-```bash
-npm version patch
-npm publish --access public
-```
-
-Use `minor` for backwards-compatible features and `major` for breaking changes.
+Applications own model providers, concrete tools, profile definitions, tracing, persistence, prompts, and UI rendering.
