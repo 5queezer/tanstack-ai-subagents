@@ -35,7 +35,8 @@ Ambiguous prompts fall back to `use_tools`, so your app can decide whether to es
 
 - `routeSubagentRequest(...)` turns user intent into a deterministic routing note.
 - `createSubagentRouter(...)` lets apps extend the intent vocabulary, risk terms, ambiguity policy, and fallback action.
-- `createSubagentRouterTool(...)` and `createRunSubagentsTool(...)` expose routing and execution as TanStack AI tools.
+- `createSubagentRouterTool(...)` and `createRunSubagentsTool(...)` expose deterministic routing and execution as TanStack AI tools.
+- `createDelegateSubagentsTool(...)` lets the LLM directly choose bounded subagent delegation through normal tool calling, without a deterministic route note.
 - Your app still owns concrete tools, provider adapters, worker profiles, tracing, persistence, prompts, and UI.
 
 ## Why not an LLM router?
@@ -176,6 +177,12 @@ The TanStack router tool can use the same app-specific router:
 
 ```ts
 createSubagentRouterTool({ router: route })
+```
+
+If you prefer model-directed orchestration, skip `route_subagents` and expose `delegate_subagents` as a normal tool. The model decides whether to call it, while the package still validates worker count and allowed tools:
+
+```ts
+createDelegateSubagentsTool({ chat, getAdapter, tools, profiles })
 ```
 
 Keep environment policy in your app instead of the package core:

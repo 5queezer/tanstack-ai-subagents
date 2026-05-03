@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  createDelegateSubagentsTool,
   createRunSubagentsTool,
   createSubagentRouterTool,
   createSubagentRouter,
@@ -173,6 +174,29 @@ test('rejects nullish tool implementations before workers run', async () => {
 test('creates TanStack AI tools', () => {
   assert.equal(createSubagentRouterTool().name, 'route_subagents')
   assert.equal(createRunSubagentsTool({ tools: {}, runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }) }).name, 'run_subagents')
+})
+
+test('delegate_subagents lets the model call subagents without a deterministic routing note', async () => {
+  const tool = createDelegateSubagentsTool({
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: `${brief.name} investigated ${brief.objective}` }),
+  })
+
+  const result = await tool.execute({
+    originalPrompt: 'Check Sablier repositories and summarize 5queezer contributions.',
+    workers: [{
+      name: 'github-researcher',
+      objective: 'Find relevant repositories and contribution evidence.',
+      scope: 'Read-only GitHub data.',
+      nonGoals: 'Do not mutate GitHub state.',
+      toolNames: ['github_search'],
+      expectedOutput: 'Repository and contribution findings with URLs.',
+    }],
+  })
+
+  assert.equal(tool.name, 'delegate_subagents')
+  assert.equal(result.action, 'spawn_one_specialist')
+  assert.equal(result.workers[0].output, 'github-researcher investigated Find relevant repositories and contribution evidence.')
 })
 
 test('starts background runs', async () => {

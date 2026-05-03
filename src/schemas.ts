@@ -46,3 +46,10 @@ export const runSubagentsInputSchema = z.object({
   workers: z.array(subagentWorkerBriefSchema).min(1),
 })
 export type RunSubagentsToolInput = z.infer<typeof runSubagentsInputSchema> & RunSubagentsInput<string>
+
+export const delegateSubagentsInputSchema = z.object({
+  originalPrompt: z.string(),
+  model: z.string().optional(),
+  workers: z.array(subagentWorkerBriefSchema).min(1),
+})
+export type DelegateSubagentsToolInput = z.infer<typeof delegateSubagentsInputSchema> & Omit<RunSubagentsInput<string>, 'routingNote'>
