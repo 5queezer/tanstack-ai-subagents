@@ -12,11 +12,11 @@ Unofficial reusable subagent routing and execution helpers for TanStack AI appli
 
 TanStack AI gives you the primitives for models and tools. This package adds the orchestration layer most apps need when one assistant becomes multiple focused workers.
 
-The core opinion: **LLM-as-router is the wrong default for finite routing decisions.** Routing should be fast, deterministic, cheap, and testable. The LLM should do specialist work, not spend tokens deciding which specialist should run.
+The core opinion: **LLM-as-router is the wrong default for finite routing decisions.** When the route set is known, routing should be fast, deterministic, cheap, and testable.
 
 ## The routing bet
 
-Most agent frameworks use another LLM call as the router. This package does not.
+Most agent frameworks use another LLM call as the router. This package does not by default.
 
 For subagent dispatch, the output space is usually finite: refuse, use tools, spawn one specialist, or spawn multiple specialists. That makes routing a classification problem, not a reasoning problem.
 
@@ -27,9 +27,15 @@ For subagent dispatch, the output space is usually finite: refuse, use tools, sp
 - **repeatable decisions** across runs, CI, and provider model updates
 - **debuggable routing rules** you can read, test, and change
 
-Ambiguous prompts fall back to `use_tools`, so your app can decide whether to escalate to an LLM router, ask a clarifying question, or handle the request directly.
+Ambiguous prompts fall back to `use_tools`, so your app can decide whether to escalate to model-directed delegation, ask a clarifying question, or handle the request directly.
 
-> Use LLMs for work that needs reasoning. Use score-based routing when the route set is known.
+This package supports three orchestration modes:
+
+1. **Deterministic routing** — call `routeSubagentRequest(...)` or `route_subagents` to classify intent without an LLM.
+2. **Deterministic routing plus execution** — call `route_subagents`, then `run_subagents` with the resulting routing note for auditable worker fanout.
+3. **Model-directed delegation** — expose `delegate_subagents` and let the model choose bounded workers through normal tool calling.
+
+> Use deterministic routing for production paths with known intents. Use model-directed delegation when open-ended context, provider-native tool calling, or conversational flexibility is more valuable than repeatability.
 
 ## What you get
 
@@ -50,7 +56,7 @@ Ambiguous prompts fall back to `use_tools`, so your app can decide whether to es
 ## Features
 
 - Deterministic score-based subagent routing with `routeSubagentRequest(...)`
-- TanStack AI tool factories for `route_subagents` and `run_subagents`
+- TanStack AI tool factories for `route_subagents`, `run_subagents`, and `delegate_subagents`
 - Bounded worker validation and fanout
 - Consumer-defined tool registries and profiles
 - Per-worker lifecycle callbacks
@@ -240,6 +246,7 @@ The handle status is updated to `completed` or `failed` when the result promise 
 createSubagentRouter(config?)
 createSubagentRouterTool(options?)
 createRunSubagentsTool(options)
+createDelegateSubagentsTool(options)
 routeSubagentRequest(prompt)
 runSubagents(input, options)
 startSubagents(input, options)
@@ -256,6 +263,7 @@ SubagentRoutingNote
 SubagentWorkerBrief
 SubagentWorkerResult
 RunSubagentsInput
+DelegateSubagentsToolInput
 RunSubagentsResult
 RunSubagentsOptions
 SubagentProfile
