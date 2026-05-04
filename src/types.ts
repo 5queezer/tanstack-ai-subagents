@@ -71,6 +71,16 @@ export type SubagentWorkerResult =
   | { name: string; status: 'completed'; output: string; error?: never }
   | { name: string; status: 'failed'; output: string; error: string }
 
+export type SubagentWorkerUpdate = {
+  stream: 'stdout' | 'stderr'
+  chunk: string
+}
+
+export type SubagentWorkerRunnerContext = {
+  signal?: AbortSignal
+  onUpdate?: (update: SubagentWorkerUpdate) => void | Promise<void>
+}
+
 export type RunSubagentsResult = {
   runId: string
   rootRunId: string
@@ -87,6 +97,7 @@ export type RunSubagentsResult = {
 export type SubagentWorkerRunner<TToolName extends string = string> = (
   brief: SubagentWorkerBrief<TToolName>,
   input: RunSubagentsInput<TToolName>,
+  context?: SubagentWorkerRunnerContext,
 ) => Promise<SubagentWorkerResult>
 
 export type SubagentProfile<TToolName extends string = string> = {

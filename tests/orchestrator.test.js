@@ -6,6 +6,7 @@ import {
   createRecursiveDelegateSubagentsTool,
   createRunSubagentsTool,
   createSubagentRouterTool,
+  createProcessWorkerRunner,
   createSubagentRouter,
   routeSubagentRequest,
   runSubagents,
@@ -391,4 +392,46 @@ test('starts background runs', async () => {
   const result = await handle.result
   assert.equal(handle.status, 'completed')
   assert.equal(result.workers[0].output, 'done')
+})
+
+test('process runner executes isolated worker commands and streams updates', async () => {
+  const updates = []
+  const runner = createProcessWorkerRunner({
+    command: process.execPath,
+    args: (brief) => ['-e', `
+      process.stdin.resume()
+      process.stdin.on('data', () => {})
+      console.log('hello from ${brief.name}')
+      console.error('progress for ${brief.name}')
+    `],
+  })
+
+  const result = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    runner,
+    onWorkerUpdate: (update, brief) => updates.push(`${brief.name}:${update.stream}:${update.chunk.trim()}`),
+  })
+
+  assert.equal(result.workers[0].status, 'completed')
+  assert.equal(result.workers[0].output, 'hello from worker-1')
+  assert.deepEqual(updates, [
+    'worker-1:stdout:hello from worker-1',
+    'worker-1:stderr:progress for worker-1',
+  ])
+})
+
+test('process runner turns non-zero exits into failed worker results', async () => {
+  const runner = createProcessWorkerRunner({
+    command: process.execPath,
+    args: ['-e', `console.error('boom'); process.exit(7)`],
+  })
+
+  const result = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    runner,
+  })
+
+  assert.equal(result.workers[0].status, 'failed')
+  assert.match(result.workers[0].error, /exited with code 7/)
+  assert.equal(result.workers[0].output, 'boom')
 })

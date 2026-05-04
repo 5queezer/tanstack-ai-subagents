@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@tanstack/ai": "^0.14.0",
+    "@types/node": "^25.6.0",
     "typescript": "^6.0.3",
     "zod": "^4.4.1"
   },

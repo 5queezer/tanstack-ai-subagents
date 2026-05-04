@@ -135,6 +135,28 @@ node examples/04-staged-dag-with-verification.mjs
 node examples/05-recursive-delegation.mjs
 ```
 
+### Process-backed workers
+
+Use `createProcessWorkerRunner(...)` when workers should run in isolated OS processes instead of the in-process TanStack AI chat adapter. The runner sends `{ brief, input }` as JSON on stdin by default, captures stdout/stderr, converts non-zero exits to failed worker results, and streams chunks through `onWorkerUpdate`.
+
+```ts
+import { createProcessWorkerRunner, runSubagents } from '@5queezer/tanstack-ai-subagents'
+
+const runner = createProcessWorkerRunner({
+  command: 'node',
+  args: ['worker.js'],
+  timeoutMs: 30_000,
+})
+
+const result = await runSubagents(input, {
+  tools,
+  runner,
+  onWorkerUpdate: (update, brief) => {
+    console.log(`[${brief.name}] ${update.stream}: ${update.chunk}`)
+  },
+})
+```
+
 ## Usage
 
 ### 1. Deterministic routing

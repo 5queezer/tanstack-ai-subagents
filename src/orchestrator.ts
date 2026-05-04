@@ -13,6 +13,7 @@ import type {
   SubagentWorkerBrief,
   SubagentWorkerResult,
   SubagentWorkerRunner,
+  SubagentWorkerUpdate,
 } from './types.js'
 
 export type RunSubagentsOptions<TToolName extends string = string, TTool = unknown, TAdapter = unknown> = {
@@ -33,7 +34,9 @@ export type RunSubagentsOptions<TToolName extends string = string, TTool = unkno
   recursiveContext?: SubagentRecursiveContext
   verifier?: (result: RunSubagentsResult, input: RunSubagentsInput<TToolName>) => Promise<SubagentVerificationResult>
   systemPrompt?: string
+  signal?: AbortSignal
   onWorkerStart?: (brief: SubagentWorkerBrief<TToolName>) => void | Promise<void>
+  onWorkerUpdate?: (update: SubagentWorkerUpdate, brief: SubagentWorkerBrief<TToolName>) => void | Promise<void>
   onWorkerFinish?: (result: SubagentWorkerResult, brief: SubagentWorkerBrief<TToolName>) => void | Promise<void>
   onWorkerFail?: (brief: SubagentWorkerBrief<TToolName>, error: unknown) => void | Promise<void>
 }
@@ -266,7 +269,10 @@ async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
 
       await callLifecycle(() => options.onWorkerStart?.(brief))
       try {
-        const result = await runner(brief, input)
+        const result = await runner(brief, input, {
+          signal: options.signal,
+          onUpdate: (update) => callLifecycle(() => options.onWorkerUpdate?.(update, brief)),
+        })
         await callLifecycle(() => options.onWorkerFinish?.(result, brief))
         return result
       } catch (error) {
