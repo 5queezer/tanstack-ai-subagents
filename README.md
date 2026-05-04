@@ -14,13 +14,46 @@ TanStack AI gives you model and tool primitives. This package adds a small orche
 
 The core opinion: **LLM-as-router is the wrong default for finite routing decisions.** When the route set is known, routing should be fast, deterministic, cheap, and testable.
 
-This package supports three orchestration modes:
+This package supports three orchestration entry modes:
 
 1. **Deterministic routing** — call `routeSubagentRequest(...)` or `route_subagents` to classify intent without an LLM.
-2. **Deterministic routing plus execution** — call `route_subagents`, then `run_subagents` with the resulting routing note for auditable worker fanout.
+2. **Deterministic routing plus execution** — call `route_subagents`, then `run_subagents` with the resulting routing note for auditable worker execution. This is the most advanced/auditable path when paired with `staged_dag` topology and a verifier.
 3. **Model-directed delegation** — expose `delegate_subagents` and let the model choose bounded workers through normal tool calling.
 
-Use deterministic routing for production paths with known intents. Use model-directed delegation when open-ended context, provider-native tool calling, or conversational flexibility is more valuable than repeatability.
+Worker execution then uses one of three topologies: `single`, `parallel`, or `staged_dag`.
+
+```mermaid
+flowchart TD
+  A[User prompt] -->|0 ms| B{Orchestration entry mode}
+
+  B -->|µs, no model call| C[Deterministic routing only]
+  C -->|µs| C1[routeSubagentRequest / route_subagents]
+  C1 -->|µs| C2[Routing note: answer, use tools, plan, spawn, refuse]
+
+  B -->|µs routing + worker runtime| D[Deterministic routing plus execution]
+  D -->|µs| D1[route_subagents]
+  D1 -->|worker runtime| D2[run_subagents with routingNote]
+
+  B -->|1 model tool-decision round| E[Model-directed delegation]
+  E -->|model latency| E1[delegate_subagents tool call]
+  E1 -->|worker runtime| E2[Model supplies worker briefs]
+
+  D2 -->|0 ms| F{Execution topology}
+  E2 -->|0 ms| F
+
+  F -->|~1 worker runtime| G[single]
+  F -->|~max worker runtime| H[parallel]
+  F -->|~sum of stage runtimes| I[staged_dag]
+
+  G -->|0 ms aggregation| J[Worker results]
+  H -->|0 ms aggregation| J
+  I -->|0 ms aggregation| J
+
+  J -->|optional verifier runtime| K[Optional verifier]
+  K -->|0 ms| L[Application integrates findings]
+```
+
+Use deterministic routing for production paths with known intents. Use deterministic routing plus `staged_dag` execution and a verifier when you need the strongest control, auditability, and validation. Use model-directed delegation when open-ended context, provider-native tool calling, or conversational flexibility is more valuable than repeatability.
 
 ## Features
 
@@ -217,6 +250,10 @@ Validation includes:
 - `external_side_effect` authority requires `policy: { riskTolerance: 'high' }`.
 
 Workers without dependencies run in parallel. Workers with `dependsOn` run as a staged DAG. Results include `topology: 'single' | 'parallel' | 'staged_dag'`.
+
+For maximum control and auditability, use deterministic routing plus `staged_dag` workers and a `verifier`. This path captures the routing rationale, enforces worker contracts, preserves dependency order, and records verification before your application integrates the findings.
+
+Built-in delegation is one layer deep: your app/main assistant delegates to workers. Recursive subagents are possible only if your application explicitly exposes `run_subagents` or `delegate_subagents` as allowed tools inside a worker profile or worker tool list. The package does not yet manage nested run trees, recursive depth accounting, or inherited provenance for those recursive calls.
 
 ## Verification
 
