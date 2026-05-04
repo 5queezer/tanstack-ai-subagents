@@ -50,6 +50,8 @@ flowchart TD
   I -->|0 ms aggregation| J
 
   J -->|optional verifier runtime| K[Optional verifier]
+  J -->|optional recursive tool call| M[recursive_delegate_subagents]
+  M -->|nested worker runtime, depth-limited| F
   K -->|0 ms| L[Application integrates findings]
 ```
 
@@ -58,10 +60,11 @@ Use deterministic routing for production paths with known intents. Use determini
 ## Features
 
 - Deterministic score-based routing with `routeSubagentRequest(...)`
-- TanStack AI tool factories for `route_subagents`, `run_subagents`, and `delegate_subagents`
-- Bounded worker validation and configurable `maxWorkers`
+- TanStack AI tool factories for `route_subagents`, `run_subagents`, `delegate_subagents`, and `recursive_delegate_subagents`
+- Bounded worker validation with configurable `maxWorkers` and `maxConcurrency`
 - Research-aligned delegation contracts: worker authority, risk, verification criteria, and dependencies
 - Parallel and staged-DAG worker execution with topology metadata
+- Package-managed recursive delegation with nested run provenance and depth limits
 - Optional verifier callbacks before integration
 - Consumer-defined tool registries and worker profiles
 - Per-worker lifecycle callbacks
@@ -129,6 +132,7 @@ node examples/01-deterministic-routing.mjs
 node examples/02-route-then-run.mjs
 node examples/03-delegate-subagents-tool.mjs
 node examples/04-staged-dag-with-verification.mjs
+node examples/05-recursive-delegation.mjs
 ```
 
 ## Usage
@@ -219,6 +223,25 @@ export const serverTools = [
 ]
 ```
 
+### 4. Recursive delegation
+
+Use `recursive_delegate_subagents` when a worker is allowed to delegate nested bounded work. The package tracks nested run provenance and enforces `policy.maxRecursiveDepth`.
+
+```ts
+import { createRecursiveDelegateSubagentsTool } from '@5queezer/tanstack-ai-subagents'
+
+const recursiveDelegate = createRecursiveDelegateSubagentsTool({
+  chat,
+  getAdapter: getChatModel,
+  tools,
+  profiles,
+  policy: { maxRecursiveDepth: 2 },
+  recursiveContext: parentInput.recursiveContext,
+})
+```
+
+Recursive results are attached to the parent result as `childRuns`, with `runId`, `parentRunId`, `rootRunId`, and `depth` metadata.
+
 ## Delegation contracts
 
 Each worker brief is a lightweight contract. The package validates contracts before any worker runs.
@@ -242,6 +265,7 @@ Validation includes:
 
 - `spawn_one_specialist` requires exactly one worker.
 - `spawn_multiple_specialists` requires two or more workers.
+- `maxConcurrency` limits how many ready workers run at once.
 - Worker names must be unique.
 - Requested tools must exist in the configured tool registry.
 - `dependsOn` entries must reference known workers.
@@ -249,11 +273,11 @@ Validation includes:
 - Dependency depth is capped by `policy.maxDepth`; default is `4`.
 - `external_side_effect` authority requires `policy: { riskTolerance: 'high' }`.
 
-Workers without dependencies run in parallel. Workers with `dependsOn` run as a staged DAG. Results include `topology: 'single' | 'parallel' | 'staged_dag'`.
+Workers without dependencies run in parallel. Workers with `dependsOn` run as a staged DAG. Results include `topology: 'single' | 'parallel' | 'staged_dag'`. Set `maxConcurrency` to cap how many workers in a parallel stage may run at once; by default each stage may run up to `maxWorkers` workers.
 
 For maximum control and auditability, use deterministic routing plus `staged_dag` workers and a `verifier`. This path captures the routing rationale, enforces worker contracts, preserves dependency order, and records verification before your application integrates the findings.
 
-Built-in delegation is one layer deep: your app/main assistant delegates to workers. Recursive subagents are possible only if your application explicitly exposes `run_subagents` or `delegate_subagents` as allowed tools inside a worker profile or worker tool list. The package does not yet manage nested run trees, recursive depth accounting, or inherited provenance for those recursive calls.
+Recursive delegation is first-class when workers use `recursive_delegate_subagents`. The package records nested `childRuns`, assigns `runId` / `parentRunId` / `rootRunId`, tracks `depth`, and enforces `policy.maxRecursiveDepth`. Manual recursion is still possible if your application exposes ordinary `run_subagents` or `delegate_subagents` tools to workers, but those manual calls do not get package-managed recursive provenance unless they pass the inherited `recursiveContext`.
 
 ## Verification
 
@@ -322,6 +346,7 @@ createSubagentRouter(config?)
 createSubagentRouterTool(options?)
 createRunSubagentsTool(options)
 createDelegateSubagentsTool(options)
+createRecursiveDelegateSubagentsTool(options)
 routeSubagentRequest(prompt)
 runSubagents(input, options)
 startSubagents(input, options)
@@ -345,6 +370,7 @@ DelegationAuthority
 DelegationPolicy
 SubagentTopology
 SubagentVerificationResult
+SubagentRecursiveContext
 SubagentProfile
 SubagentRunHandle
 SubagentToolRegistry

@@ -1,8 +1,11 @@
+import pLimit from 'p-limit'
+
 import type {
   DelegationPolicy,
   RunSubagentsInput,
   RunSubagentsResult,
   SubagentProfile,
+  SubagentRecursiveContext,
   SubagentRunHandle,
   SubagentToolRegistry,
   SubagentTopology,
@@ -25,7 +28,9 @@ export type RunSubagentsOptions<TToolName extends string = string, TTool = unkno
   tools?: SubagentToolRegistry<TToolName, TTool>
   profiles?: Record<string, SubagentProfile<TToolName>>
   maxWorkers?: number
+  maxConcurrency?: number
   policy?: DelegationPolicy
+  recursiveContext?: SubagentRecursiveContext
   verifier?: (result: RunSubagentsResult, input: RunSubagentsInput<TToolName>) => Promise<SubagentVerificationResult>
   systemPrompt?: string
   onWorkerStart?: (brief: SubagentWorkerBrief<TToolName>) => void | Promise<void>
@@ -44,19 +49,27 @@ export async function runSubagents<TToolName extends string = string, TTool = un
     policy: options.policy,
   })
   validateToolImplementations(input, options)
+  validateConcurrency(options.maxConcurrency)
 
+  const recursiveContext = input.recursiveContext ?? options.recursiveContext ?? createRootRecursiveContext()
+  const runInput = { ...input, recursiveContext }
   const runner = options.runner ?? createModelWorkerRunner(options)
-  const topology = selectTopology(input.workers)
-  const workers = await runWorkerStages(input, options, runner)
+  const topology = selectTopology(runInput.workers)
+  const workers = await runWorkerStages(runInput, options, runner)
   const result: RunSubagentsResult = {
-    action: input.routingNote.chosenAction,
+    runId: recursiveContext.runId,
+    rootRunId: recursiveContext.rootRunId,
+    parentRunId: recursiveContext.parentRunId,
+    depth: recursiveContext.depth,
+    action: runInput.routingNote.chosenAction,
     topology,
     workers,
+    childRuns: recursiveContext.childRuns,
     integrationHint: 'Integrate completed worker findings, call out failures or uncertainty, and validate against the routing note validation gate.',
   }
 
   if (options.verifier) {
-    result.verification = await options.verifier(result, input)
+    result.verification = await options.verifier(result, runInput)
   } else if (options.policy?.requireVerification) {
     result.verification = {
       status: 'needs_review',
@@ -68,12 +81,26 @@ export async function runSubagents<TToolName extends string = string, TTool = un
   return result
 }
 
+export function createRootRecursiveContext(): SubagentRecursiveContext {
+  const runId = createRunId()
+  return { runId, rootRunId: runId, depth: 0, childRuns: [] }
+}
+
+export function createChildRecursiveContext(parent: SubagentRecursiveContext, policy: DelegationPolicy = {}): SubagentRecursiveContext {
+  const depth = parent.depth + 1
+  const maxRecursiveDepth = policy.maxRecursiveDepth ?? 1
+  if (depth > maxRecursiveDepth) {
+    throw new Error(`recursive delegation depth ${depth} exceeds maxRecursiveDepth ${maxRecursiveDepth}`)
+  }
+  return { runId: createRunId(), rootRunId: parent.rootRunId, parentRunId: parent.runId, depth, childRuns: [] }
+}
+
 export function startSubagents<TToolName extends string = string, TTool = unknown, TAdapter = unknown>(
   input: RunSubagentsInput<TToolName>,
   options: RunSubagentsOptions<TToolName, TTool, TAdapter> = {},
 ): SubagentRunHandle {
   const handle: SubagentRunHandle = {
-    runId: `subagent-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    runId: createRunId(),
     status: 'running',
     result: Promise.resolve(undefined as never),
   }
@@ -225,7 +252,8 @@ async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
     const ready = [...pending.values()].filter((worker) => (worker.dependsOn ?? []).every((name) => completed.has(name) || failed.has(name)))
     if (ready.length === 0) throw new Error('worker dependency cycle detected')
 
-    const stageResults = await Promise.all(ready.map(async (brief) => {
+    const limit = pLimit(options.maxConcurrency ?? options.maxWorkers ?? input.workers.length)
+    const stageResults = await Promise.all(ready.map((brief) => limit(async () => {
       const failedDependency = (brief.dependsOn ?? []).find((name) => failed.has(name))
       if (failedDependency) {
         return {
@@ -252,7 +280,7 @@ async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
         await callLifecycle(() => options.onWorkerFinish?.(result, brief))
         return result
       }
-    }))
+    })))
 
     for (const result of stageResults) {
       results.push(result)
@@ -269,6 +297,13 @@ function selectTopology<TToolName extends string>(workers: Array<SubagentWorkerB
   if (workers.length === 1) return 'single'
   if (workers.some((worker) => (worker.dependsOn ?? []).length > 0)) return 'staged_dag'
   return 'parallel'
+}
+
+function validateConcurrency(maxConcurrency: number | undefined) {
+  if (maxConcurrency === undefined) return
+  if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
+    throw new Error('maxConcurrency must be at least 1')
+  }
 }
 
 function validateDelegationContracts<TToolName extends string>(workers: Array<SubagentWorkerBrief<TToolName>>, policy: DelegationPolicy = {}) {
@@ -327,6 +362,10 @@ function getAllowedWorkerTools<TToolName extends string, TTool>(names: TToolName
     if (tool == null) throw new Error(`worker tool implementation is missing: ${name}`)
     return tool
   })
+}
+
+function createRunId() {
+  return `subagent-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function requireText(value: string, field: string) {

@@ -3,6 +3,7 @@ import { test } from 'node:test'
 
 import {
   createDelegateSubagentsTool,
+  createRecursiveDelegateSubagentsTool,
   createRunSubagentsTool,
   createSubagentRouterTool,
   createSubagentRouter,
@@ -150,6 +151,38 @@ test('rejects invalid maxWorkers values', async () => {
   )
 })
 
+test('runSubagents limits concurrent workers when maxConcurrency is configured', async () => {
+  let active = 0
+  let maxActive = 0
+
+  const result = await runSubagents(input('spawn_multiple_specialists', 3), {
+    maxWorkers: 3,
+    maxConcurrency: 1,
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      return { name: brief.name, status: 'completed', output: `${brief.name} done` }
+    },
+  })
+
+  assert.equal(result.workers.length, 3)
+  assert.equal(maxActive, 1)
+})
+
+test('runSubagents rejects invalid maxConcurrency', async () => {
+  await assert.rejects(
+    () => runSubagents(input('spawn_multiple_specialists', 2), {
+      maxConcurrency: 0,
+      tools: { github_search: { name: 'github_search' } },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: 'ok' }),
+    }),
+    /maxConcurrency must be at least 1/,
+  )
+})
+
 test('rejects nullish tool implementations before workers run', async () => {
   const request = input()
   request.workers[0].toolNames = ['missing_tool']
@@ -174,6 +207,7 @@ test('rejects nullish tool implementations before workers run', async () => {
 test('creates TanStack AI tools', () => {
   assert.equal(createSubagentRouterTool().name, 'route_subagents')
   assert.equal(createRunSubagentsTool({ tools: {}, runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }) }).name, 'run_subagents')
+  assert.equal(createRecursiveDelegateSubagentsTool({ tools: {}, runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }) }).name, 'recursive_delegate_subagents')
 })
 
 test('delegate_subagents lets the model call subagents without a deterministic routing note', async () => {
@@ -289,6 +323,62 @@ test('runs verifier after workers complete', async () => {
 
   assert.equal(result.verification.status, 'verified')
   assert.deepEqual(result.verification.checkedWorkers, ['worker-1'])
+})
+
+test('recursive delegate tool enforces depth and records child runs', async () => {
+  const root = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    policy: { maxRecursiveDepth: 2 },
+    runner: async (brief, parentInput) => {
+      const recursiveDelegate = createRecursiveDelegateSubagentsTool({
+        tools: { github_search: { name: 'github_search' } },
+        policy: { maxRecursiveDepth: 2 },
+        recursiveContext: parentInput.recursiveContext,
+        runner: async (childBrief) => ({ name: childBrief.name, status: 'completed', output: 'nested done' }),
+      })
+
+      await recursiveDelegate.execute({
+        originalPrompt: 'Nested review',
+        workers: [{
+          name: 'nested-worker',
+          objective: 'Review nested scope',
+          scope: 'nested files',
+          nonGoals: 'Do not edit',
+          toolNames: ['github_search'],
+          expectedOutput: 'Nested findings',
+        }],
+      })
+
+      return { name: brief.name, status: 'completed', output: 'parent done' }
+    },
+  })
+
+  assert.equal(root.depth, 0)
+  assert.equal(root.childRuns.length, 1)
+  assert.equal(root.childRuns[0].depth, 1)
+  assert.equal(root.childRuns[0].parentRunId, root.runId)
+  assert.equal(root.childRuns[0].workers[0].output, 'nested done')
+
+  const blocked = createRecursiveDelegateSubagentsTool({
+    tools: { github_search: { name: 'github_search' } },
+    policy: { maxRecursiveDepth: 0 },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+  })
+
+  await assert.rejects(
+    () => blocked.execute({
+      originalPrompt: 'Too deep',
+      workers: [{
+        name: 'nested-worker',
+        objective: 'Review nested scope',
+        scope: 'nested files',
+        nonGoals: 'Do not edit',
+        toolNames: ['github_search'],
+        expectedOutput: 'Nested findings',
+      }],
+    }),
+    /recursive delegation depth 1 exceeds maxRecursiveDepth 0/,
+  )
 })
 
 test('starts background runs', async () => {

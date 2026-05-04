@@ -25,6 +25,7 @@ export type DelegationAuthority = 'read_only' | 'write_local' | 'external_side_e
 export type DelegationPolicy = {
   riskTolerance?: RoutingLevel
   maxDepth?: number
+  maxRecursiveDepth?: number
   requireVerification?: boolean
 }
 
@@ -50,11 +51,20 @@ export type SubagentWorkerBrief<TToolName extends string = string> = {
   risk?: RoutingLevel
 }
 
+export type SubagentRecursiveContext = {
+  runId: string
+  rootRunId: string
+  parentRunId?: string
+  depth: number
+  childRuns: RunSubagentsResult[]
+}
+
 export type RunSubagentsInput<TToolName extends string = string> = {
   originalPrompt: string
   routingNote: SubagentRoutingNote
   workers: Array<SubagentWorkerBrief<TToolName>>
   model?: string
+  recursiveContext?: SubagentRecursiveContext
 }
 
 export type SubagentWorkerResult =
@@ -62,10 +72,15 @@ export type SubagentWorkerResult =
   | { name: string; status: 'failed'; output: string; error: string }
 
 export type RunSubagentsResult = {
+  runId: string
+  rootRunId: string
+  parentRunId?: string
+  depth: number
   action: SubagentAction
   topology: SubagentTopology
   workers: SubagentWorkerResult[]
   verification?: SubagentVerificationResult
+  childRuns: RunSubagentsResult[]
   integrationHint: string
 }
 

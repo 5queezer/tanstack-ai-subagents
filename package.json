@@ -56,5 +56,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "p-limit": "^5.0.0"
   }
 }

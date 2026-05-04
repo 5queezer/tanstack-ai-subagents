@@ -12,6 +12,7 @@ const expectedExamples = [
   '02-route-then-run.mjs',
   '03-delegate-subagents-tool.mjs',
   '04-staged-dag-with-verification.mjs',
+  '05-recursive-delegation.mjs',
 ]
 
 test('examples run successfully', async () => {

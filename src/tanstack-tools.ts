@@ -1,10 +1,10 @@
 import { toolDefinition } from '@tanstack/ai'
 
-import { runSubagents, type RunSubagentsOptions } from './orchestrator.js'
+import { createChildRecursiveContext, createRootRecursiveContext, runSubagents, type RunSubagentsOptions } from './orchestrator.js'
 import { routeSubagentRequest, type SubagentRouter } from './router.js'
 import { delegateSubagentsInputSchema, runSubagentsInputSchema, subagentRouteInputSchema } from './schemas.js'
 import type { DelegateSubagentsToolInput, RunSubagentsToolInput, SubagentRouteInput } from './schemas.js'
-import type { RunSubagentsInput, TraceFunction } from './types.js'
+import type { RunSubagentsInput, SubagentRecursiveContext, TraceFunction } from './types.js'
 
 export type CreateSubagentRouterToolOptions = {
   router?: SubagentRouter
@@ -13,6 +13,10 @@ export type CreateSubagentRouterToolOptions = {
 
 export type CreateRunSubagentsToolOptions<TToolName extends string = string, TTool = unknown, TAdapter = unknown> = RunSubagentsOptions<TToolName, TTool, TAdapter> & {
   trace?: TraceFunction
+}
+
+export type CreateRecursiveDelegateSubagentsToolOptions<TToolName extends string = string, TTool = unknown, TAdapter = unknown> = CreateRunSubagentsToolOptions<TToolName, TTool, TAdapter> & {
+  recursiveContext?: SubagentRecursiveContext
 }
 
 export function createSubagentRouterTool(options: CreateSubagentRouterToolOptions = {}) {
@@ -66,6 +70,35 @@ export function createDelegateSubagentsTool<TToolName extends string = string, T
     } as RunSubagentsInput<TToolName>
     const run = async () => runSubagents(runInput, options)
     return options.trace ? options.trace('delegate_subagents', input, run) : run()
+  })
+
+  return Object.assign(tool, { definition })
+}
+
+export function createRecursiveDelegateSubagentsTool<TToolName extends string = string, TTool = unknown, TAdapter = unknown>(
+  options: CreateRecursiveDelegateSubagentsToolOptions<TToolName, TTool, TAdapter>,
+) {
+  const definition = toolDefinition({
+    name: 'recursive_delegate_subagents',
+    description: 'Let a worker delegate to nested bounded subagents with package-managed depth and provenance.',
+    inputSchema: delegateSubagentsInputSchema,
+  })
+
+  const tool = definition.server(async (args) => {
+    const input = args as DelegateSubagentsToolInput
+    const parentContext = options.recursiveContext ?? createRootRecursiveContext()
+    const childContext = createChildRecursiveContext(parentContext, options.policy)
+    const runInput = {
+      ...input,
+      recursiveContext: childContext,
+      routingNote: modelChosenRoutingNote(input.workers.length),
+    } as RunSubagentsInput<TToolName>
+    const run = async () => {
+      const result = await runSubagents(runInput, { ...options, recursiveContext: childContext })
+      parentContext.childRuns.push(result)
+      return result
+    }
+    return options.trace ? options.trace('recursive_delegate_subagents', input, run) : run()
   })
 
   return Object.assign(tool, { definition })
