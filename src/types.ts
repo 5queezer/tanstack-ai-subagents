@@ -20,6 +20,22 @@ export type SubagentRoutingNote = {
   validationGate: string
 }
 
+export type DelegationAuthority = 'read_only' | 'write_local' | 'external_side_effect'
+
+export type DelegationPolicy = {
+  riskTolerance?: RoutingLevel
+  maxDepth?: number
+  requireVerification?: boolean
+}
+
+export type SubagentTopology = 'single' | 'parallel' | 'staged_dag'
+
+export type SubagentVerificationResult = {
+  status: 'verified' | 'needs_review' | 'failed'
+  summary: string
+  checkedWorkers: string[]
+}
+
 export type SubagentWorkerBrief<TToolName extends string = string> = {
   name: string
   objective: string
@@ -28,6 +44,10 @@ export type SubagentWorkerBrief<TToolName extends string = string> = {
   toolNames?: TToolName[]
   profile?: string
   expectedOutput: string
+  dependsOn?: string[]
+  verificationCriteria?: string
+  authority?: DelegationAuthority
+  risk?: RoutingLevel
 }
 
 export type RunSubagentsInput<TToolName extends string = string> = {
@@ -43,7 +63,9 @@ export type SubagentWorkerResult =
 
 export type RunSubagentsResult = {
   action: SubagentAction
+  topology: SubagentTopology
   workers: SubagentWorkerResult[]
+  verification?: SubagentVerificationResult
   integrationHint: string
 }
 

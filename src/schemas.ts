@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { RunSubagentsInput } from './types.js'
 
 export const routingLevelSchema = z.enum(['low', 'medium', 'high'])
+export const delegationAuthoritySchema = z.enum(['read_only', 'write_local', 'external_side_effect'])
 
 export const subagentActionSchema = z.enum([
   'answer_directly',
@@ -37,6 +38,10 @@ export const subagentWorkerBriefSchema = z.object({
   toolNames: z.array(z.string()).optional(),
   profile: z.string().optional(),
   expectedOutput: z.string(),
+  dependsOn: z.array(z.string()).optional(),
+  verificationCriteria: z.string().optional(),
+  authority: delegationAuthoritySchema.optional(),
+  risk: routingLevelSchema.optional(),
 })
 
 export const runSubagentsInputSchema = z.object({

@@ -1,33 +1,18 @@
 # @5queezer/tanstack-ai-subagents
 
-Unofficial reusable subagent routing and execution helpers for TanStack AI applications.
+Reusable subagent routing and execution helpers for TanStack AI applications.
 
-> Route one prompt into the right bounded specialist fanout, then run those workers with your own TanStack AI models, tools, and profiles.
+Use it when one assistant needs to decide whether to answer directly, use tools, write a plan, or delegate bounded work to one or more specialist workers.
 
 ![30s routing demo: deterministic routing to bounded worker fanout](demo/routing-in-action.svg)
 
 [Raw asciinema cast](demo/routing-in-action.cast)
 
-## Why this exists
+## Why
 
-TanStack AI gives you the primitives for models and tools. This package adds the orchestration layer most apps need when one assistant becomes multiple focused workers.
+TanStack AI gives you model and tool primitives. This package adds a small orchestration layer for applications that want focused worker fanout without giving up control over models, tools, validation, or UI.
 
 The core opinion: **LLM-as-router is the wrong default for finite routing decisions.** When the route set is known, routing should be fast, deterministic, cheap, and testable.
-
-## The routing bet
-
-Most agent frameworks use another LLM call as the router. This package does not by default.
-
-For subagent dispatch, the output space is usually finite: refuse, use tools, spawn one specialist, or spawn multiple specialists. That makes routing a classification problem, not a reasoning problem.
-
-`@5queezer/tanstack-ai-subagents` uses deterministic intent scoring by default:
-
-- **microsecond routing** instead of another model round-trip
-- **no extra tokens** just to pick a worker
-- **repeatable decisions** across runs, CI, and provider model updates
-- **debuggable routing rules** you can read, test, and change
-
-Ambiguous prompts fall back to `use_tools`, so your app can decide whether to escalate to model-directed delegation, ask a clarifying question, or handle the request directly.
 
 This package supports three orchestration modes:
 
@@ -35,51 +20,126 @@ This package supports three orchestration modes:
 2. **Deterministic routing plus execution** — call `route_subagents`, then `run_subagents` with the resulting routing note for auditable worker fanout.
 3. **Model-directed delegation** — expose `delegate_subagents` and let the model choose bounded workers through normal tool calling.
 
-> Use deterministic routing for production paths with known intents. Use model-directed delegation when open-ended context, provider-native tool calling, or conversational flexibility is more valuable than repeatability.
-
-## What you get
-
-- `routeSubagentRequest(...)` turns user intent into a deterministic routing note.
-- `createSubagentRouter(...)` lets apps extend the intent vocabulary, risk terms, ambiguity policy, and fallback action.
-- `createSubagentRouterTool(...)` and `createRunSubagentsTool(...)` expose deterministic routing and execution as TanStack AI tools.
-- `createDelegateSubagentsTool(...)` lets the LLM directly choose bounded subagent delegation through normal tool calling, without a deterministic route note.
-- Your app still owns concrete tools, provider adapters, worker profiles, tracing, persistence, prompts, and UI.
-
-## Why not an LLM router?
-
-| Router style | Best for | Tradeoff |
-| --- | --- | --- |
-| Score-based routing | Known intent space, 5-20 workers, production paths | Requires maintaining scoring rules |
-| LLM routing | Open-ended intents, discovery, hundreds of possible agents | Adds latency, cost, nondeterminism, and harder debugging |
-| Hybrid | Production default | Deterministic for confident cases, app fallback for ambiguity |
+Use deterministic routing for production paths with known intents. Use model-directed delegation when open-ended context, provider-native tool calling, or conversational flexibility is more valuable than repeatability.
 
 ## Features
 
-- Deterministic score-based subagent routing with `routeSubagentRequest(...)`
+- Deterministic score-based routing with `routeSubagentRequest(...)`
 - TanStack AI tool factories for `route_subagents`, `run_subagents`, and `delegate_subagents`
-- Bounded worker validation and fanout
-- Consumer-defined tool registries and profiles
+- Bounded worker validation and configurable `maxWorkers`
+- Research-aligned delegation contracts: worker authority, risk, verification criteria, and dependencies
+- Parallel and staged-DAG worker execution with topology metadata
+- Optional verifier callbacks before integration
+- Consumer-defined tool registries and worker profiles
 - Per-worker lifecycle callbacks
 - Background run handles with `startSubagents(...)`
 - Provider-agnostic model adapter injection
 
-## Install
+## Installation
 
 ```bash
 npm install @5queezer/tanstack-ai-subagents @tanstack/ai zod
 ```
 
-`@tanstack/ai` and `zod` are peer dependencies. This package is not an official TanStack package.
+`@tanstack/ai` and `zod` are peer dependencies. This is not an official TanStack package.
+
+Requirements:
+
+- Node.js `>=18`
+- ESM project or compatible bundler/runtime
 
 ## Quick start
+
+This example runs deterministic routing, then executes workers with a fake runner. Real applications usually pass TanStack AI `chat`, a model adapter, and concrete tools instead.
+
+```ts
+import { routeSubagentRequest, runSubagents } from '@5queezer/tanstack-ai-subagents'
+
+const routingNote = routeSubagentRequest('Review frontend and backend independently')
+
+const result = await runSubagents({
+  originalPrompt: 'Review frontend and backend independently',
+  routingNote,
+  workers: [
+    worker('frontend', 'Review frontend code'),
+    worker('backend', 'Review backend code'),
+  ],
+}, {
+  tools: { repo_read: { name: 'repo_read' } },
+  runner: async (brief) => ({
+    name: brief.name,
+    status: 'completed',
+    output: `${brief.name}: no issues found`,
+  }),
+})
+
+console.log(result.action)   // 'spawn_multiple_specialists'
+console.log(result.topology) // 'parallel'
+
+function worker(name: string, objective: string) {
+  return {
+    name,
+    objective,
+    scope: 'read-only repository inspection',
+    nonGoals: 'Do not edit files',
+    toolNames: ['repo_read'],
+    expectedOutput: 'Concise findings with evidence',
+  }
+}
+```
+
+Runnable examples are in [`examples/`](examples/):
+
+```bash
+npm run build
+node examples/01-deterministic-routing.mjs
+node examples/02-route-then-run.mjs
+node examples/03-delegate-subagents-tool.mjs
+node examples/04-staged-dag-with-verification.mjs
+```
+
+## Usage
+
+### 1. Deterministic routing
+
+`routeSubagentRequest(...)` returns a structured routing note. The default router uses dependency-free intent scoring instead of an LLM call.
+
+```ts
+import { routeSubagentRequest } from '@5queezer/tanstack-ai-subagents'
+
+const note = routeSubagentRequest('Debug frontend and backend independently')
+
+console.log(note.chosenAction) // 'spawn_multiple_specialists'
+console.log(note.rationale)
+```
+
+Customize the router when your app has domain-specific vocabulary:
+
+```ts
+import { createSubagentRouter } from '@5queezer/tanstack-ai-subagents'
+
+const route = createSubagentRouter({
+  intents: {
+    incident: ['incident', 'outage', 'sev1'],
+    security: ['oauth', 'permission', 'vulnerability'],
+  },
+  highRiskTerms: ['pci', 'production database'],
+  parallelTerms: ['ios', 'android'],
+  areaTerms: ['frontend', 'backend', 'mobile'],
+})
+
+const note = route('Investigate sev1 across ios and android')
+```
+
+### 2. TanStack AI tools
+
+Expose deterministic routing and execution as tools:
 
 ```ts
 import { chat } from '@tanstack/ai'
 import {
   createRunSubagentsTool,
   createSubagentRouterTool,
-  routeSubagentRequest,
-  startSubagents,
 } from '@5queezer/tanstack-ai-subagents'
 
 import { getChatModel } from './ai-provider'
@@ -104,35 +164,84 @@ export const serverTools = [
     getAdapter: getChatModel,
     tools,
     profiles,
-    onWorkerStart: (brief) => console.info('worker started', brief.name),
-    onWorkerFinish: (result) => console.info('worker finished', result.name, result.status),
   }),
 ]
-
-const routingNote = routeSubagentRequest('Review architecture')
-
-const handle = startSubagents({
-  originalPrompt: 'Review architecture',
-  model: 'provider/model',
-  routingNote,
-  workers: [{
-    name: 'explorer',
-    objective: 'Inspect the branch',
-    scope: 'source and tests',
-    nonGoals: 'Do not edit files',
-    profile: 'explore',
-    expectedOutput: 'Findings with evidence',
-  }],
-}, { chat, getAdapter: getChatModel, tools, profiles })
-
-const result = await handle.result
 ```
 
-## Concepts
+### 3. Model-directed delegation
 
-### Tools
+If you want the model to choose workers through normal tool calling, expose `delegate_subagents`. The package still validates worker count, tool access, profiles, dependencies, and delegation policy.
 
-The package does not ship concrete worker tools. Applications provide a tool registry and workers reference tools by name:
+```ts
+import { createDelegateSubagentsTool } from '@5queezer/tanstack-ai-subagents'
+
+export const serverTools = [
+  createDelegateSubagentsTool({
+    chat,
+    getAdapter: getChatModel,
+    tools,
+    profiles,
+    maxWorkers: 4,
+  }),
+]
+```
+
+## Delegation contracts
+
+Each worker brief is a lightweight contract. The package validates contracts before any worker runs.
+
+```ts
+{
+  name: 'release-verifier',
+  objective: 'Check whether findings support release',
+  dependsOn: ['implementation', 'tests'],
+  scope: 'worker outputs and validation evidence',
+  nonGoals: 'Do not publish or mutate state',
+  toolNames: ['repo_read'],
+  authority: 'read_only',
+  risk: 'medium',
+  verificationCriteria: 'Release recommendation follows from worker evidence',
+  expectedOutput: 'Release recommendation with caveats',
+}
+```
+
+Validation includes:
+
+- `spawn_one_specialist` requires exactly one worker.
+- `spawn_multiple_specialists` requires two or more workers.
+- Worker names must be unique.
+- Requested tools must exist in the configured tool registry.
+- `dependsOn` entries must reference known workers.
+- Dependency cycles are rejected.
+- Dependency depth is capped by `policy.maxDepth`; default is `4`.
+- `external_side_effect` authority requires `policy: { riskTolerance: 'high' }`.
+
+Workers without dependencies run in parallel. Workers with `dependsOn` run as a staged DAG. Results include `topology: 'single' | 'parallel' | 'staged_dag'`.
+
+## Verification
+
+Use `verifier` when delegated work must be checked before integration.
+
+```ts
+const result = await runSubagents(input, {
+  tools,
+  policy: { requireVerification: true, maxDepth: 3 },
+  runner,
+  verifier: async (runResult) => ({
+    status: 'verified',
+    summary: `Checked ${runResult.workers.length} workers`,
+    checkedWorkers: runResult.workers.map((worker) => worker.name),
+  }),
+})
+
+console.log(result.verification?.status)
+```
+
+If `policy.requireVerification` is true and no verifier is configured, the result includes `verification.status === 'needs_review'`.
+
+## Tools and profiles
+
+The package does not ship concrete worker tools. Applications provide a registry and workers reference tools by name:
 
 ```ts
 const tools = {
@@ -141,11 +250,7 @@ const tools = {
 }
 ```
 
-If a worker requests a tool that is not configured, or maps to a nullish implementation, validation fails before the worker runs.
-
-### Profiles
-
-Profiles let applications define reusable worker capabilities:
+Profiles define reusable worker capabilities:
 
 ```ts
 const profiles = {
@@ -157,88 +262,21 @@ const profiles = {
 }
 ```
 
-A worker can then use `profile: 'verify'` instead of listing `toolNames` directly.
+A worker can use `profile: 'verify'` instead of listing `toolNames` directly.
 
-### Routing behavior
+## Background runs
 
-`routeSubagentRequest(...)` uses deterministic, dependency-free intent scoring rather than first-match regex routing. It scores clear intent groups, treats unsafe prompts as highest priority, and falls back to `use_tools` when intent is ambiguous instead of forcing a specialist route.
-
-Use `createSubagentRouter(...)` when your app has its own domain vocabulary or routing policy:
+`startSubagents(...)` starts orchestration and returns a handle immediately:
 
 ```ts
-const route = createSubagentRouter({
-  intents: {
-    incident: ['incident', 'outage', 'sev1'],
-    security: ['oauth', 'permission', 'vulnerability'],
-  },
-  highRiskTerms: ['pci', 'production database'],
-  parallelTerms: ['ios', 'android'],
-  areaTerms: ['frontend', 'backend', 'mobile'],
-})
+import { startSubagents } from '@5queezer/tanstack-ai-subagents'
 
-const routingNote = route('Investigate sev1 across ios and android')
-```
-
-The TanStack router tool can use the same app-specific router:
-
-```ts
-createSubagentRouterTool({ router: route })
-```
-
-If you prefer model-directed orchestration, skip `route_subagents` and expose `delegate_subagents` as a normal tool. The model decides whether to call it, while the package still validates worker count and allowed tools:
-
-```ts
-createDelegateSubagentsTool({ chat, getAdapter, tools, profiles })
-```
-
-Keep environment policy in your app instead of the package core:
-
-```ts
-const route = createSubagentRouter(
-  process.env.SUBAGENTS_ROUTER_POLICY === 'incidents'
-    ? incidentRoutingPolicy
-    : undefined,
-)
-```
-
-### Worker limits
-
-- `spawn_one_specialist` requires exactly one worker.
-- `spawn_multiple_specialists` requires at least two workers.
-- The default maximum is four workers.
-- Override the maximum with `maxWorkers`.
-
-```ts
-createRunSubagentsTool({ chat, getAdapter, tools, maxWorkers: 8 })
-```
-
-### Lifecycle callbacks
-
-Lifecycle callbacks are observability hooks. Callback failures are ignored so they cannot change worker outcomes.
-
-```ts
-createRunSubagentsTool({
-  chat,
-  getAdapter,
-  tools,
-  onWorkerStart: (brief) => logStart(brief),
-  onWorkerFail: (brief, error) => logFailure(brief, error),
-  onWorkerFinish: (result, brief) => logFinish(brief, result),
-})
-```
-
-### Background runs
-
-`startSubagents(...)` starts the same orchestration as `runSubagents(...)` but returns a handle immediately:
-
-```ts
 const handle = startSubagents(input, options)
 
-console.log(handle.runId, handle.status)
+console.log(handle.runId, handle.status) // running
 const result = await handle.result
+console.log(handle.status) // completed or failed
 ```
-
-The handle status is updated to `completed` or `failed` when the result promise settles.
 
 ## API
 
@@ -253,7 +291,7 @@ startSubagents(input, options)
 validateRunSubagentsInput(input, options)
 ```
 
-Key exported types include:
+Key exported types:
 
 ```ts
 SubagentAction
@@ -266,13 +304,50 @@ RunSubagentsInput
 DelegateSubagentsToolInput
 RunSubagentsResult
 RunSubagentsOptions
+DelegationAuthority
+DelegationPolicy
+SubagentTopology
+SubagentVerificationResult
 SubagentProfile
 SubagentRunHandle
 SubagentToolRegistry
 ```
 
+## Development
+
+```bash
+npm install
+npm test
+npm run build
+npm run typecheck
+npm pack --dry-run
+```
+
+`npm test` builds the TypeScript source and runs the Node test suite, including smoke tests for every `.mjs` file in `examples/`.
+
 ## Design boundaries
 
-This package owns routing, validation, bounded fanout, partial failure handling, lifecycle callbacks, background run handles, profile resolution, and TanStack AI tool factories.
+This package owns:
 
-Applications own model providers, concrete tools, profile definitions, tracing, persistence, prompts, and UI rendering.
+- routing notes
+- validation
+- bounded fanout
+- staged-DAG execution
+- partial failure handling
+- lifecycle callbacks
+- background run handles
+- profile resolution
+- TanStack AI tool factories
+
+Your application owns:
+
+- model providers
+- concrete tools
+- profile definitions
+- tracing and persistence
+- prompts and UI
+- final integration of worker findings
+
+## License
+
+[MIT](LICENSE)

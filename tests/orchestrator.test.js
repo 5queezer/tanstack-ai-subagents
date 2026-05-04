@@ -199,6 +199,98 @@ test('delegate_subagents lets the model call subagents without a deterministic r
   assert.equal(result.workers[0].output, 'github-researcher investigated Find relevant repositories and contribution evidence.')
 })
 
+test('rejects invalid delegation contracts', async () => {
+  const duplicateNames = input('spawn_multiple_specialists', 2)
+  duplicateNames.workers[1].name = duplicateNames.workers[0].name
+
+  await assert.rejects(
+    () => runSubagents(duplicateNames, {
+      tools: { github_search: { name: 'github_search' } },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /duplicate worker name: worker-1/,
+  )
+
+  const unknownDependency = input('spawn_multiple_specialists', 2)
+  unknownDependency.workers[1].dependsOn = ['missing']
+
+  await assert.rejects(
+    () => runSubagents(unknownDependency, {
+      tools: { github_search: { name: 'github_search' } },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /unknown dependency: missing/,
+  )
+
+  const cycle = input('spawn_multiple_specialists', 2)
+  cycle.workers[0].dependsOn = ['worker-2']
+  cycle.workers[1].dependsOn = ['worker-1']
+
+  await assert.rejects(
+    () => runSubagents(cycle, {
+      tools: { github_search: { name: 'github_search' } },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /worker dependency cycle detected/,
+  )
+
+  const externalSideEffect = input()
+  externalSideEffect.workers[0].authority = 'external_side_effect'
+
+  await assert.rejects(
+    () => runSubagents(externalSideEffect, {
+      tools: { github_search: { name: 'github_search' } },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /external_side_effect authority requires high riskTolerance/,
+  )
+
+  const tooDeep = input('spawn_multiple_specialists', 3)
+  tooDeep.workers[1].dependsOn = ['worker-1']
+  tooDeep.workers[2].dependsOn = ['worker-2']
+
+  await assert.rejects(
+    () => runSubagents(tooDeep, {
+      tools: { github_search: { name: 'github_search' } },
+      policy: { maxDepth: 2 },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /worker dependency depth exceeds maxDepth 2/,
+  )
+})
+
+test('runs dependency DAGs in stages and reports topology', async () => {
+  const request = input('spawn_multiple_specialists', 3)
+  request.workers[2].dependsOn = ['worker-1', 'worker-2']
+
+  const events = []
+  const result = await runSubagents(request, {
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => {
+      events.push(`start:${brief.name}`)
+      return { name: brief.name, status: 'completed', output: `${brief.name} done` }
+    },
+  })
+
+  assert.deepEqual(events, ['start:worker-1', 'start:worker-2', 'start:worker-3'])
+  assert.equal(result.topology, 'staged_dag')
+})
+
+test('runs verifier after workers complete', async () => {
+  const result = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: 'done' }),
+    verifier: async (runResult) => ({
+      status: 'verified',
+      summary: `checked ${runResult.workers.length} worker`,
+      checkedWorkers: runResult.workers.map((worker) => worker.name),
+    }),
+  })
+
+  assert.equal(result.verification.status, 'verified')
+  assert.deepEqual(result.verification.checkedWorkers, ['worker-1'])
+})
+
 test('starts background runs', async () => {
   const handle = startSubagents(input(), {
     tools: { github_search: { name: 'github_search' } },

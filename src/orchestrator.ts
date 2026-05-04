@@ -1,9 +1,12 @@
 import type {
+  DelegationPolicy,
   RunSubagentsInput,
   RunSubagentsResult,
   SubagentProfile,
   SubagentRunHandle,
   SubagentToolRegistry,
+  SubagentTopology,
+  SubagentVerificationResult,
   SubagentWorkerBrief,
   SubagentWorkerResult,
   SubagentWorkerRunner,
@@ -22,6 +25,8 @@ export type RunSubagentsOptions<TToolName extends string = string, TTool = unkno
   tools?: SubagentToolRegistry<TToolName, TTool>
   profiles?: Record<string, SubagentProfile<TToolName>>
   maxWorkers?: number
+  policy?: DelegationPolicy
+  verifier?: (result: RunSubagentsResult, input: RunSubagentsInput<TToolName>) => Promise<SubagentVerificationResult>
   systemPrompt?: string
   onWorkerStart?: (brief: SubagentWorkerBrief<TToolName>) => void | Promise<void>
   onWorkerFinish?: (result: SubagentWorkerResult, brief: SubagentWorkerBrief<TToolName>) => void | Promise<void>
@@ -36,34 +41,31 @@ export async function runSubagents<TToolName extends string = string, TTool = un
     toolNames: configuredToolNames(options),
     maxWorkers: options.maxWorkers,
     profiles: options.profiles,
+    policy: options.policy,
   })
   validateToolImplementations(input, options)
 
   const runner = options.runner ?? createModelWorkerRunner(options)
-  const workers = await Promise.all(input.workers.map(async (brief) => {
-    await callLifecycle(() => options.onWorkerStart?.(brief))
-    try {
-      const result = await runner(brief, input)
-      await callLifecycle(() => options.onWorkerFinish?.(result, brief))
-      return result
-    } catch (error) {
-      await callLifecycle(() => options.onWorkerFail?.(brief, error))
-      const result = {
-        name: brief.name,
-        status: 'failed' as const,
-        output: '',
-        error: error instanceof Error ? error.message : 'Unknown worker error',
-      }
-      await callLifecycle(() => options.onWorkerFinish?.(result, brief))
-      return result
-    }
-  }))
-
-  return {
+  const topology = selectTopology(input.workers)
+  const workers = await runWorkerStages(input, options, runner)
+  const result: RunSubagentsResult = {
     action: input.routingNote.chosenAction,
+    topology,
     workers,
     integrationHint: 'Integrate completed worker findings, call out failures or uncertainty, and validate against the routing note validation gate.',
   }
+
+  if (options.verifier) {
+    result.verification = await options.verifier(result, input)
+  } else if (options.policy?.requireVerification) {
+    result.verification = {
+      status: 'needs_review',
+      summary: 'Delegation policy requires verification, but no verifier was configured.',
+      checkedWorkers: [],
+    }
+  }
+
+  return result
 }
 
 export function startSubagents<TToolName extends string = string, TTool = unknown, TAdapter = unknown>(
@@ -92,7 +94,7 @@ export function startSubagents<TToolName extends string = string, TTool = unknow
 
 export function validateRunSubagentsInput<TToolName extends string = string>(
   input: RunSubagentsInput<TToolName>,
-  options: { toolNames?: readonly TToolName[]; maxWorkers?: number; profiles?: Record<string, SubagentProfile<TToolName>> } = {},
+  options: { toolNames?: readonly TToolName[]; maxWorkers?: number; profiles?: Record<string, SubagentProfile<TToolName>>; policy?: DelegationPolicy } = {},
 ) {
   const action = input.routingNote.chosenAction
   const maxWorkers = options.maxWorkers ?? 4
@@ -113,6 +115,8 @@ export function validateRunSubagentsInput<TToolName extends string = string>(
   if (action === 'spawn_multiple_specialists' && (input.workers.length < 2 || input.workers.length > maxWorkers)) {
     throw new Error(`spawn_multiple_specialists requires 2 to ${maxWorkers} workers`)
   }
+
+  validateDelegationContracts(input.workers, options.policy)
 
   input.workers.forEach((worker, index) => {
     requireText(worker.name, `workers[${index}].name`)
@@ -193,7 +197,10 @@ async function runModelWorker<TToolName extends string, TTool, TAdapter>(
         `Scope: ${brief.scope}`,
         `Non-goals: ${brief.nonGoals}`,
         `Expected output: ${brief.expectedOutput}`,
-      ].join('\n'),
+        brief.verificationCriteria ? `Verification criteria: ${brief.verificationCriteria}` : '',
+        brief.authority ? `Authority: ${brief.authority}` : '',
+        brief.risk ? `Risk: ${brief.risk}` : '',
+      ].filter(Boolean).join('\n'),
     }],
   })
 
@@ -202,6 +209,103 @@ async function runModelWorker<TToolName extends string, TTool, TAdapter>(
     status: 'completed',
     output,
   }
+}
+
+async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
+  input: RunSubagentsInput<TToolName>,
+  options: RunSubagentsOptions<TToolName, TTool, TAdapter>,
+  runner: SubagentWorkerRunner<TToolName>,
+) {
+  const pending = new Map(input.workers.map((worker) => [worker.name, worker]))
+  const completed = new Set<string>()
+  const failed = new Set<string>()
+  const results: SubagentWorkerResult[] = []
+
+  while (pending.size > 0) {
+    const ready = [...pending.values()].filter((worker) => (worker.dependsOn ?? []).every((name) => completed.has(name) || failed.has(name)))
+    if (ready.length === 0) throw new Error('worker dependency cycle detected')
+
+    const stageResults = await Promise.all(ready.map(async (brief) => {
+      const failedDependency = (brief.dependsOn ?? []).find((name) => failed.has(name))
+      if (failedDependency) {
+        return {
+          name: brief.name,
+          status: 'failed' as const,
+          output: '',
+          error: `dependency failed: ${failedDependency}`,
+        }
+      }
+
+      await callLifecycle(() => options.onWorkerStart?.(brief))
+      try {
+        const result = await runner(brief, input)
+        await callLifecycle(() => options.onWorkerFinish?.(result, brief))
+        return result
+      } catch (error) {
+        await callLifecycle(() => options.onWorkerFail?.(brief, error))
+        const result = {
+          name: brief.name,
+          status: 'failed' as const,
+          output: '',
+          error: error instanceof Error ? error.message : 'Unknown worker error',
+        }
+        await callLifecycle(() => options.onWorkerFinish?.(result, brief))
+        return result
+      }
+    }))
+
+    for (const result of stageResults) {
+      results.push(result)
+      pending.delete(result.name)
+      if (result.status === 'completed') completed.add(result.name)
+      else failed.add(result.name)
+    }
+  }
+
+  return results
+}
+
+function selectTopology<TToolName extends string>(workers: Array<SubagentWorkerBrief<TToolName>>): SubagentTopology {
+  if (workers.length === 1) return 'single'
+  if (workers.some((worker) => (worker.dependsOn ?? []).length > 0)) return 'staged_dag'
+  return 'parallel'
+}
+
+function validateDelegationContracts<TToolName extends string>(workers: Array<SubagentWorkerBrief<TToolName>>, policy: DelegationPolicy = {}) {
+  const names = new Set<string>()
+  for (const worker of workers) {
+    if (names.has(worker.name)) throw new Error(`duplicate worker name: ${worker.name}`)
+    names.add(worker.name)
+    if (worker.authority === 'external_side_effect' && policy.riskTolerance !== 'high') {
+      throw new Error('external_side_effect authority requires high riskTolerance')
+    }
+  }
+
+  for (const worker of workers) {
+    for (const dependency of worker.dependsOn ?? []) {
+      if (!names.has(dependency)) throw new Error(`unknown dependency: ${dependency}`)
+    }
+  }
+
+  const maxDepth = policy.maxDepth ?? 4
+  const visiting = new Set<string>()
+  const depths = new Map<string, number>()
+  const byName = new Map(workers.map((worker) => [worker.name, worker]))
+
+  const depthOf = (name: string): number => {
+    if (visiting.has(name)) throw new Error('worker dependency cycle detected')
+    const memoized = depths.get(name)
+    if (memoized) return memoized
+    visiting.add(name)
+    const worker = byName.get(name)
+    const depth = 1 + Math.max(0, ...(worker?.dependsOn ?? []).map(depthOf))
+    visiting.delete(name)
+    depths.set(name, depth)
+    if (depth > maxDepth) throw new Error(`worker dependency depth exceeds maxDepth ${maxDepth}`)
+    return depth
+  }
+
+  for (const worker of workers) depthOf(worker.name)
 }
 
 function resolveWorkerToolNames<TToolName extends string>(
