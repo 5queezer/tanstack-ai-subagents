@@ -27,6 +27,7 @@ export type DelegationPolicy = {
   maxDepth?: number
   maxRecursiveDepth?: number
   requireVerification?: boolean
+  maxToolsPerWorker?: number
 }
 
 export type SubagentTopology = 'single' | 'parallel' | 'staged_dag'
@@ -113,5 +114,18 @@ export type SubagentRunHandle = {
 }
 
 export type SubagentToolRegistry<TToolName extends string = string, TTool = unknown> = Record<TToolName, TTool>
+
+export type SubagentToolDescriptor<TToolName extends string = string, TTool = unknown> = {
+  name: TToolName
+  tool: TTool
+}
+
+export type SubagentToolSelector<TToolName extends string = string, TTool = unknown> = (args: {
+  worker: SubagentWorkerBrief<TToolName>
+  originalPrompt: string
+  routingNote: SubagentRoutingNote
+  availableTools: Array<SubagentToolDescriptor<TToolName, TTool>>
+  maxTools: number
+}) => Promise<TToolName[]> | TToolName[]
 
 export type TraceFunction = <T>(toolName: string, args: unknown, fn: () => Promise<T>) => Promise<T>

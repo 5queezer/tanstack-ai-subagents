@@ -141,6 +141,41 @@ test('supports profile-provided tools and system prompt', async () => {
   assert.equal(result.workers[0].output, 'profile output')
 })
 
+test('selects worker tools at runtime when no profile or explicit toolNames are provided', async () => {
+  const request = input()
+  delete request.workers[0].toolNames
+
+  const result = await runSubagents(request, {
+    chat: async (args) => {
+      assert.deepEqual(args.tools, [{ name: 'github_search' }, { name: 'github_get' }])
+      return 'selected tools output'
+    },
+    getAdapter: (model) => `adapter:${model}`,
+    tools: { github_search: { name: 'github_search' }, github_get: { name: 'github_get' }, test_runner: { name: 'test_runner' } },
+    toolSelector: async ({ worker, maxTools }) => {
+      assert.equal(worker.name, 'worker-1')
+      assert.equal(maxTools, 5)
+      return ['github_search', 'github_get']
+    },
+  })
+
+  assert.equal(result.workers[0].output, 'selected tools output')
+})
+
+test('rejects workers that request more than maxToolsPerWorker tools', async () => {
+  const request = input()
+  request.workers[0].toolNames = ['one', 'two', 'three']
+
+  await assert.rejects(
+    () => runSubagents(request, {
+      tools: { one: {}, two: {}, three: {} },
+      policy: { maxToolsPerWorker: 2 },
+      runner: async (brief) => ({ name: brief.name, status: 'completed', output: '' }),
+    }),
+    /workers\[0\] requested 3 tools; maxToolsPerWorker is 2/,
+  )
+})
+
 test('rejects invalid maxWorkers values', async () => {
   await assert.rejects(
     () => runSubagents(input('spawn_multiple_specialists', 2), {

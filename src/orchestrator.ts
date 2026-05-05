@@ -7,7 +7,9 @@ import type {
   SubagentProfile,
   SubagentRecursiveContext,
   SubagentRunHandle,
+  SubagentToolDescriptor,
   SubagentToolRegistry,
+  SubagentToolSelector,
   SubagentTopology,
   SubagentVerificationResult,
   SubagentWorkerBrief,
@@ -28,6 +30,7 @@ export type RunSubagentsOptions<TToolName extends string = string, TTool = unkno
   getAdapter?: (model: string) => TAdapter
   tools?: SubagentToolRegistry<TToolName, TTool>
   profiles?: Record<string, SubagentProfile<TToolName>>
+  toolSelector?: SubagentToolSelector<TToolName, TTool>
   maxWorkers?: number
   maxConcurrency?: number
   policy?: DelegationPolicy
@@ -45,17 +48,19 @@ export async function runSubagents<TToolName extends string = string, TTool = un
   input: RunSubagentsInput<TToolName>,
   options: RunSubagentsOptions<TToolName, TTool, TAdapter> = {},
 ): Promise<RunSubagentsResult> {
+  const selectedToolNames = await selectMissingWorkerTools(input, options)
   validateRunSubagentsInput(input, {
     toolNames: configuredToolNames(options),
     maxWorkers: options.maxWorkers,
     profiles: options.profiles,
     policy: options.policy,
+    selectedToolNames,
   })
-  validateToolImplementations(input, options)
+  validateToolImplementations(input, options, selectedToolNames)
   validateConcurrency(options.maxConcurrency)
 
   const recursiveContext = input.recursiveContext ?? options.recursiveContext ?? createRootRecursiveContext()
-  const runInput = { ...input, recursiveContext }
+  const runInput = { ...input, recursiveContext, workers: applySelectedToolNames(input.workers, selectedToolNames) }
   const runner = options.runner ?? createModelWorkerRunner(options)
   const topology = selectTopology(runInput.workers)
   const workers = await runWorkerStages(runInput, options, runner)
@@ -124,10 +129,11 @@ export function startSubagents<TToolName extends string = string, TTool = unknow
 
 export function validateRunSubagentsInput<TToolName extends string = string>(
   input: RunSubagentsInput<TToolName>,
-  options: { toolNames?: readonly TToolName[]; maxWorkers?: number; profiles?: Record<string, SubagentProfile<TToolName>>; policy?: DelegationPolicy } = {},
+  options: { toolNames?: readonly TToolName[]; maxWorkers?: number; profiles?: Record<string, SubagentProfile<TToolName>>; policy?: DelegationPolicy; selectedToolNames?: Map<string, TToolName[]> } = {},
 ) {
   const action = input.routingNote.chosenAction
   const maxWorkers = options.maxWorkers ?? 4
+  const maxToolsPerWorker = options.policy?.maxToolsPerWorker ?? 5
   const configuredTools = options.toolNames
 
   if (!Number.isInteger(maxWorkers) || maxWorkers < 2) {
@@ -155,7 +161,10 @@ export function validateRunSubagentsInput<TToolName extends string = string>(
     requireText(worker.nonGoals, `workers[${index}].nonGoals`)
     requireText(worker.expectedOutput, `workers[${index}].expectedOutput`)
 
-    const toolNames = resolveWorkerToolNames(worker, options.profiles)
+    const toolNames = resolveWorkerToolNames(worker, options.profiles, options.selectedToolNames?.get(worker.name))
+    if (toolNames.length > maxToolsPerWorker) {
+      throw new Error(`workers[${index}] requested ${toolNames.length} tools; maxToolsPerWorker is ${maxToolsPerWorker}`)
+    }
     if (!configuredTools) {
       throw new Error('run_subagents requires tools to validate worker tool access')
     }
@@ -176,14 +185,55 @@ function configuredToolNames<TToolName extends string, TTool, TAdapter>(options:
 function validateToolImplementations<TToolName extends string, TTool, TAdapter>(
   input: RunSubagentsInput<TToolName>,
   options: RunSubagentsOptions<TToolName, TTool, TAdapter>,
+  selectedToolNames?: Map<string, TToolName[]>,
 ) {
   if (!options.tools) return
 
   for (const worker of input.workers) {
-    for (const name of resolveWorkerToolNames(worker, options.profiles)) {
+    for (const name of resolveWorkerToolNames(worker, options.profiles, selectedToolNames?.get(worker.name))) {
       if (options.tools[name] == null) throw new Error(`worker tool implementation is missing: ${name}`)
     }
   }
+}
+
+async function selectMissingWorkerTools<TToolName extends string, TTool, TAdapter>(
+  input: RunSubagentsInput<TToolName>,
+  options: RunSubagentsOptions<TToolName, TTool, TAdapter>,
+) {
+  if (!options.toolSelector) return undefined
+
+  const selected = new Map<string, TToolName[]>()
+  const availableTools = toolDescriptors(options.tools)
+  const maxTools = options.policy?.maxToolsPerWorker ?? 5
+
+  for (const worker of input.workers) {
+    if (worker.toolNames || worker.profile) continue
+    selected.set(worker.name, await options.toolSelector({
+      worker,
+      originalPrompt: input.originalPrompt,
+      routingNote: input.routingNote,
+      availableTools,
+      maxTools,
+    }))
+  }
+
+  return selected.size ? selected : undefined
+}
+
+function toolDescriptors<TToolName extends string, TTool>(tools: SubagentToolRegistry<TToolName, TTool> | undefined): Array<SubagentToolDescriptor<TToolName, TTool>> {
+  if (!tools) return []
+  return Object.entries(tools).map(([name, tool]) => ({ name: name as TToolName, tool: tool as TTool }))
+}
+
+function applySelectedToolNames<TToolName extends string>(
+  workers: Array<SubagentWorkerBrief<TToolName>>,
+  selectedToolNames: Map<string, TToolName[]> | undefined,
+) {
+  if (!selectedToolNames) return workers
+  return workers.map((worker) => {
+    const toolNames = selectedToolNames.get(worker.name)
+    return toolNames ? { ...worker, toolNames } : worker
+  })
 }
 
 async function callLifecycle(callback: () => void | Promise<void>) {
@@ -352,6 +402,7 @@ function validateDelegationContracts<TToolName extends string>(workers: Array<Su
 function resolveWorkerToolNames<TToolName extends string>(
   brief: SubagentWorkerBrief<TToolName>,
   profiles?: Record<string, SubagentProfile<TToolName>>,
+  selectedToolNames?: TToolName[],
 ): TToolName[] {
   if (brief.toolNames) return brief.toolNames
   if (brief.profile) {
@@ -359,7 +410,8 @@ function resolveWorkerToolNames<TToolName extends string>(
     if (!profile) throw new Error(`unknown worker profile: ${brief.profile}`)
     return profile.toolNames
   }
-  throw new Error(`workers.${brief.name}.toolNames or profile is required`)
+  if (selectedToolNames) return selectedToolNames
+  throw new Error(`workers.${brief.name}.toolNames, profile, or toolSelector result is required`)
 }
 
 function getAllowedWorkerTools<TToolName extends string, TTool>(names: TToolName[], registry: SubagentToolRegistry<TToolName, TTool>) {
