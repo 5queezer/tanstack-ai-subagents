@@ -61,7 +61,8 @@ Use deterministic routing for production paths with known intents. Use determini
 
 - Deterministic score-based routing with `routeSubagentRequest(...)`
 - TanStack AI tool factories for `route_subagents`, `run_subagents`, `delegate_subagents`, and `recursive_delegate_subagents`
-- Bounded worker validation with configurable `maxWorkers` and `maxConcurrency`
+- Bounded worker validation with configurable `maxWorkers`, `maxConcurrency`, and `policy.maxToolsPerWorker`
+- Optional runtime tool selection for workers from application-provided registries, including MCP/OpenAPI-loaded tools
 - Research-aligned delegation contracts: worker authority, risk, verification criteria, and dependencies
 - Parallel and staged-DAG worker execution with topology metadata
 - Package-managed recursive delegation with nested run provenance and depth limits
@@ -289,7 +290,9 @@ Validation includes:
 - `spawn_multiple_specialists` requires two or more workers.
 - `maxConcurrency` limits how many ready workers run at once.
 - Worker names must be unique.
-- Requested tools must exist in the configured tool registry.
+- Workers can specify `toolNames`, use a `profile`, or rely on `toolSelector` when configured.
+- Requested or selected tools must exist in the configured tool registry.
+- Each worker may use at most `policy.maxToolsPerWorker` tools; default is `5`.
 - `dependsOn` entries must reference known workers.
 - Dependency cycles are rejected.
 - Dependency depth is capped by `policy.maxDepth`; default is `4`.
@@ -347,6 +350,24 @@ const profiles = {
 
 A worker can use `profile: 'verify'` instead of listing `toolNames` directly.
 
+For runtime-loaded registries, such as MCP servers generated from `openapi.json`, provide a `toolSelector`. The selector runs before validation for workers without `toolNames` or `profile`, receives the current runtime catalog, and must return a bounded subset of tool names:
+
+```ts
+const result = await runSubagents(input, {
+  chat,
+  getAdapter,
+  tools: mcpTools,
+  policy: { maxToolsPerWorker: 5 },
+  toolSelector: async ({ worker, availableTools, maxTools }) => {
+    // Use deterministic matching, embeddings, or an LLM planner here.
+    // Always return names from availableTools and no more than maxTools.
+    return chooseRelevantTools(worker, availableTools).slice(0, maxTools)
+  },
+})
+```
+
+Resolution order is explicit `worker.toolNames`, then `worker.profile`, then `toolSelector`. The orchestrator validates the final names against the registry and cap before workers run.
+
 ## Background runs
 
 `startSubagents(...)` starts orchestration and returns a handle immediately:
@@ -396,6 +417,8 @@ SubagentRecursiveContext
 SubagentProfile
 SubagentRunHandle
 SubagentToolRegistry
+SubagentToolDescriptor
+SubagentToolSelector
 ```
 
 ## Development
@@ -422,6 +445,7 @@ This package owns:
 - lifecycle callbacks
 - background run handles
 - profile resolution
+- runtime tool selection hooks
 - TanStack AI tool factories
 
 Your application owns:
@@ -429,6 +453,7 @@ Your application owns:
 - model providers
 - concrete tools
 - profile definitions
+- runtime tool registry loading and selector strategy
 - tracing and persistence
 - prompts and UI
 - final integration of worker findings
