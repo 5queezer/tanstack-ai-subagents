@@ -65,8 +65,14 @@ Use deterministic routing for production paths with known intents. Use determini
 - Optional runtime tool selection for workers from application-provided registries, including MCP/OpenAPI-loaded tools
 - Research-aligned delegation contracts: worker authority, risk, verification criteria, and dependencies
 - Parallel and staged-DAG worker execution with topology metadata
+- Configurable dependency-failure handling: skip dependents, abort, or continue
+- Output validation for required markdown sections and simple required JSON fields
+- Worker retry policy plus aggregate cost/token/turn budget guards
 - Package-managed recursive delegation with nested run provenance and depth limits
+- Trace summaries for task/stage events
 - Optional verifier callbacks before integration
+- Repair-task planning helpers for failed verifier results
+- Run-history listing/formatting helpers for persisted subagent run records
 - Consumer-defined tool registries and worker profiles
 - Per-worker lifecycle callbacks
 - Background run handles with `startSubagents(...)`
@@ -297,14 +303,33 @@ Validation includes:
 - Dependency cycles are rejected.
 - Dependency depth is capped by `policy.maxDepth`; default is `4`.
 - `external_side_effect` authority requires `policy: { riskTolerance: 'high' }`.
+- `policy.onWorkerFailure` controls dependency behavior: `skip_dependents` (default), `abort`, or `continue`.
+- `policy.maxRetries` retries transient worker failures; default is `1` attempt.
+- `policy.maxCost`, `policy.maxTokens`, and `policy.maxTurns` enforce aggregate usage budgets when worker results report `usage`.
 
-Workers without dependencies run in parallel. Workers with `dependsOn` run as a staged DAG. Results include `topology: 'single' | 'parallel' | 'staged_dag'`. Set `maxConcurrency` to cap how many workers in a parallel stage may run at once; by default each stage may run up to `maxWorkers` workers.
+Workers without dependencies run in parallel. Workers with `dependsOn` run as a staged DAG. Results include `topology: 'single' | 'parallel' | 'staged_dag'` plus a lightweight `trace` summary of stage/task events. Set `maxConcurrency` to cap how many workers in a parallel stage may run at once; by default each stage may run up to `maxWorkers` workers.
 
 For maximum control and auditability, use deterministic routing plus `staged_dag` workers and a `verifier`. This path captures the routing rationale, enforces worker contracts, preserves dependency order, and records verification before your application integrates the findings.
 
 Recursive delegation is first-class when workers use `recursive_delegate_subagents`. The package records nested `childRuns`, assigns `runId` / `parentRunId` / `rootRunId`, tracks `depth`, and enforces `policy.maxRecursiveDepth`. Manual recursion is still possible if your application exposes ordinary `run_subagents` or `delegate_subagents` tools to workers, but those manual calls do not get package-managed recursive provenance unless they pass the inherited `recursiveContext`.
 
-## Verification
+## Output validation and verification
+
+Workers can request lightweight output validation before their result is accepted:
+
+```ts
+{
+  name: 'release-verifier',
+  objective: 'Check release evidence',
+  scope: 'worker outputs',
+  nonGoals: 'Do not mutate state',
+  toolNames: ['repo_read'],
+  expectedOutput: 'Markdown report with evidence',
+  expectedSections: ['Summary', 'Evidence'],
+}
+```
+
+For machine-readable outputs, set `jsonSchema: { required: ['fieldName'] }` to require valid JSON with the listed top-level fields. Failed validation turns that worker result into `status: 'failed'` with the validation error.
 
 Use `verifier` when delegated work must be checked before integration.
 
@@ -324,6 +349,8 @@ console.log(result.verification?.status)
 ```
 
 If `policy.requireVerification` is true and no verifier is configured, the result includes `verification.status === 'needs_review'`.
+
+If a verifier worker or verifier callback fails in your application flow, `planVerifierRepairTasks(...)` can turn the failure plus prior worker outputs into bounded follow-up repair tasks.
 
 ## Tools and profiles
 
@@ -454,7 +481,7 @@ Your application owns:
 - concrete tools
 - profile definitions
 - runtime tool registry loading and selector strategy
-- tracing and persistence
+- durable trace storage and persistence
 - prompts and UI
 - final integration of worker findings
 

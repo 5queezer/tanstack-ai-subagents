@@ -1,5 +1,9 @@
 import pLimit from 'p-limit'
 
+import { validateWorkerOutput } from './output-validation.js'
+import { enforceBudgetSnapshot, runWithRetry } from './retry-budget.js'
+import { addTraceEvent, createTrace, summarizeTrace } from './trace.js'
+
 import type {
   DelegationPolicy,
   RunSubagentsInput,
@@ -63,7 +67,8 @@ export async function runSubagents<TToolName extends string = string, TTool = un
   const runInput = { ...input, recursiveContext, workers: applySelectedToolNames(input.workers, selectedToolNames) }
   const runner = options.runner ?? createModelWorkerRunner(options)
   const topology = selectTopology(runInput.workers)
-  const workers = await runWorkerStages(runInput, options, runner)
+  const trace = createTrace(recursiveContext.runId)
+  const workers = await runWorkerStages(runInput, options, runner, trace)
   const result: RunSubagentsResult = {
     runId: recursiveContext.runId,
     rootRunId: recursiveContext.rootRunId,
@@ -73,6 +78,7 @@ export async function runSubagents<TToolName extends string = string, TTool = un
     topology,
     workers,
     childRuns: recursiveContext.childRuns,
+    trace: summarizeTrace(trace),
     integrationHint: 'Integrate completed worker findings, call out failures or uncertainty, and validate against the routing note validation gate.',
   }
 
@@ -107,13 +113,14 @@ export function startSubagents<TToolName extends string = string, TTool = unknow
   input: RunSubagentsInput<TToolName>,
   options: RunSubagentsOptions<TToolName, TTool, TAdapter> = {},
 ): SubagentRunHandle {
+  const recursiveContext = input.recursiveContext ?? options.recursiveContext ?? createRootRecursiveContext()
   const handle: SubagentRunHandle = {
-    runId: createRunId(),
+    runId: recursiveContext.runId,
     status: 'running',
     result: Promise.resolve(undefined as never),
   }
 
-  handle.result = runSubagents(input, options).then(
+  handle.result = runSubagents({ ...input, recursiveContext }, { ...options, recursiveContext }).then(
     (result) => {
       handle.status = 'completed'
       return result
@@ -135,6 +142,11 @@ export function validateRunSubagentsInput<TToolName extends string = string>(
   const maxWorkers = options.maxWorkers ?? 4
   const maxToolsPerWorker = options.policy?.maxToolsPerWorker ?? 5
   const configuredTools = options.toolNames
+  const onWorkerFailure = options.policy?.onWorkerFailure
+
+  if (onWorkerFailure !== undefined && !['skip_dependents', 'abort', 'continue'].includes(onWorkerFailure)) {
+    throw new Error(`invalid onWorkerFailure: ${onWorkerFailure}`)
+  }
 
   if (!Number.isInteger(maxWorkers) || maxWorkers < 2) {
     throw new Error('maxWorkers must be at least 2')
@@ -295,23 +307,41 @@ async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
   input: RunSubagentsInput<TToolName>,
   options: RunSubagentsOptions<TToolName, TTool, TAdapter>,
   runner: SubagentWorkerRunner<TToolName>,
+  trace: ReturnType<typeof createTrace>,
 ) {
   const pending = new Map(input.workers.map((worker) => [worker.name, worker]))
   const completed = new Set<string>()
   const failed = new Set<string>()
   const results: SubagentWorkerResult[] = []
+  const onWorkerFailure = options.policy?.onWorkerFailure ?? 'skip_dependents'
+  let aborted = false
+  let stageIndex = 0
 
   while (pending.size > 0) {
     const ready = [...pending.values()].filter((worker) => (worker.dependsOn ?? []).every((name) => completed.has(name) || failed.has(name)))
     if (ready.length === 0) throw new Error('worker dependency cycle detected')
+    addTraceEvent(trace, { type: 'stage_start', stage: stageIndex, taskCount: ready.length })
+
+    if (aborted) {
+      for (const brief of ready) {
+        const result = { name: brief.name, status: 'skipped' as const, output: '', error: 'aborted: prior stage failed' }
+        results.push(result)
+        pending.delete(brief.name)
+        failed.add(brief.name)
+        addTraceEvent(trace, { type: 'task_skipped', name: brief.name })
+      }
+      stageIndex += 1
+      continue
+    }
 
     const limit = pLimit(options.maxConcurrency ?? options.maxWorkers ?? input.workers.length)
     const stageResults = await Promise.all(ready.map((brief) => limit(async () => {
       const failedDependency = (brief.dependsOn ?? []).find((name) => failed.has(name))
-      if (failedDependency) {
+      if (failedDependency && onWorkerFailure === 'skip_dependents') {
+        addTraceEvent(trace, { type: 'task_skipped', name: brief.name, dependency: failedDependency })
         return {
           name: brief.name,
-          status: 'failed' as const,
+          status: 'skipped' as const,
           output: '',
           error: `dependency failed: ${failedDependency}`,
         }
@@ -319,11 +349,16 @@ async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
 
       await callLifecycle(() => options.onWorkerStart?.(brief))
       try {
-        const result = await runner(brief, input, {
-          signal: options.signal,
-          onUpdate: (update) => callLifecycle(() => options.onWorkerUpdate?.(update, brief)),
-        })
+        const { value } = await runWithRetry(
+          () => runner(brief, input, {
+            signal: options.signal,
+            onUpdate: (update) => callLifecycle(() => options.onWorkerUpdate?.(update, brief)),
+          }),
+          { maxRetries: options.policy?.maxRetries ?? 1 },
+        )
+        let result = validateWorkerResult(value, brief)
         await callLifecycle(() => options.onWorkerFinish?.(result, brief))
+        addTraceEvent(trace, { type: result.status === 'completed' ? 'task_complete' : 'task_failed', name: brief.name })
         return result
       } catch (error) {
         await callLifecycle(() => options.onWorkerFail?.(brief, error))
@@ -334,19 +369,77 @@ async function runWorkerStages<TToolName extends string, TTool, TAdapter>(
           error: error instanceof Error ? error.message : 'Unknown worker error',
         }
         await callLifecycle(() => options.onWorkerFinish?.(result, brief))
+        addTraceEvent(trace, { type: 'task_failed', name: brief.name, error: result.error })
         return result
       }
     })))
 
+    let stageHadFailure = false
+    const stageResultStart = results.length
     for (const result of stageResults) {
       results.push(result)
       pending.delete(result.name)
       if (result.status === 'completed') completed.add(result.name)
-      else failed.add(result.name)
+      else {
+        failed.add(result.name)
+        if (result.status === 'failed') stageHadFailure = true
+      }
     }
+    try {
+      enforceBudgetSnapshot(budgetSnapshot(results), {
+        maxCost: options.policy?.maxCost,
+        maxTokens: options.policy?.maxTokens,
+        maxTurns: options.policy?.maxTurns,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'budget exceeded'
+      addTraceEvent(trace, { type: 'budget_exceeded', error: message })
+      for (let i = results.length - 1; i >= stageResultStart; i--) {
+        const result = results[i]
+        if (result && result.status === 'completed') {
+          results[i] = { name: result.name, status: 'failed', output: result.output, error: message, usage: result.usage }
+          failed.add(result.name)
+          completed.delete(result.name)
+          break
+        }
+      }
+      stageHadFailure = true
+    }
+    if (stageHadFailure && onWorkerFailure === 'abort') aborted = true
+    addTraceEvent(trace, { type: 'stage_end', stage: stageIndex })
+    stageIndex += 1
   }
 
   return results
+}
+
+function validateWorkerResult<TToolName extends string>(result: SubagentWorkerResult, brief: SubagentWorkerBrief<TToolName>): SubagentWorkerResult {
+  if (result.status !== 'completed') return result
+  if (!brief.expectedSections && !brief.jsonSchema) return result
+  try {
+    validateWorkerOutput(result.output, { expectedSections: brief.expectedSections, jsonSchema: brief.jsonSchema })
+    return result
+  } catch (error) {
+    return {
+      name: result.name,
+      status: 'failed',
+      output: result.output,
+      error: error instanceof Error ? error.message : 'output validation failed',
+      usage: result.usage,
+    }
+  }
+}
+
+function budgetSnapshot(results: SubagentWorkerResult[]) {
+  return results.reduce(
+    (acc, result) => {
+      acc.cost += result.usage?.cost ?? 0
+      acc.tokens += result.usage?.tokens ?? 0
+      acc.turns += result.usage?.turns ?? 0
+      return acc
+    },
+    { cost: 0, tokens: 0, turns: 0 },
+  )
 }
 
 function selectTopology<TToolName extends string>(workers: Array<SubagentWorkerBrief<TToolName>>): SubagentTopology {

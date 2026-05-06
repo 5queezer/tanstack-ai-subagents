@@ -470,3 +470,85 @@ test('process runner turns non-zero exits into failed worker results', async () 
   assert.match(result.workers[0].error, /exited with code 7/)
   assert.equal(result.workers[0].output, 'boom')
 })
+
+test('validates expected markdown sections in worker output', async () => {
+  const request = input()
+  request.workers[0].expectedSections = ['Summary', 'Evidence']
+
+  const result = await runSubagents(request, {
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: '## Summary\nok' }),
+  })
+
+  assert.equal(result.workers[0].status, 'failed')
+  assert.match(result.workers[0].error, /Evidence/)
+})
+
+test('validates required JSON fields in worker output', async () => {
+  const request = input()
+  request.workers[0].jsonSchema = { required: ['name', 'status'] }
+
+  const result = await runSubagents(request, {
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: '{"name":"worker-1"}' }),
+  })
+
+  assert.equal(result.workers[0].status, 'failed')
+  assert.match(result.workers[0].error, /status/)
+})
+
+test('retries failed workers up to maxRetries', async () => {
+  let attempts = 0
+  const result = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    policy: { maxRetries: 3 },
+    runner: async (brief) => {
+      attempts += 1
+      if (attempts < 3) throw new Error('transient')
+      return { name: brief.name, status: 'completed', output: 'ok' }
+    },
+  })
+
+  assert.equal(attempts, 3)
+  assert.equal(result.workers[0].status, 'completed')
+})
+
+test('enforces aggregate budget after worker completion', async () => {
+  const result = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    policy: { maxTurns: 0 },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: 'ok', usage: { turns: 1 } }),
+  })
+
+  assert.equal(result.workers[0].status, 'failed')
+  assert.match(result.workers[0].error, /maxTurns|turns/)
+})
+
+test('onWorkerFailure continue runs dependents despite failed dependency', async () => {
+  const request = input('spawn_multiple_specialists', 2)
+  request.workers[1].dependsOn = ['worker-1']
+
+  const result = await runSubagents(request, {
+    tools: { github_search: { name: 'github_search' } },
+    policy: { onWorkerFailure: 'continue' },
+    runner: async (brief) => {
+      if (brief.name === 'worker-1') return { name: brief.name, status: 'failed', output: '', error: 'boom' }
+      return { name: brief.name, status: 'completed', output: 'dependent ran' }
+    },
+  })
+
+  assert.equal(result.workers.find((w) => w.name === 'worker-2').status, 'completed')
+})
+
+test('adds trace summary with task and stage events', async () => {
+  const result = await runSubagents(input(), {
+    tools: { github_search: { name: 'github_search' } },
+    runner: async (brief) => ({ name: brief.name, status: 'completed', output: 'ok' }),
+  })
+
+  assert.equal(result.trace.runId, result.runId)
+  assert.equal(result.trace.counts.stage_start, 1)
+  assert.equal(result.trace.counts.task_complete, 1)
+  assert.equal(result.trace.counts.stage_end, 1)
+  assert.ok(result.trace.durationMs >= 0)
+})

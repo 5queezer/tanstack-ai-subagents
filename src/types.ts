@@ -28,6 +28,12 @@ export type DelegationPolicy = {
   maxRecursiveDepth?: number
   requireVerification?: boolean
   maxToolsPerWorker?: number
+  onWorkerFailure?: 'skip_dependents' | 'abort' | 'continue'
+  maxRetries?: number
+  maxCost?: number
+  maxTokens?: number
+  maxTurns?: number
+  allowExternalSideEffectWithoutConfirmation?: boolean
 }
 
 export type SubagentTopology = 'single' | 'parallel' | 'staged_dag'
@@ -47,7 +53,11 @@ export type SubagentWorkerBrief<TToolName extends string = string> = {
   profile?: string
   expectedOutput: string
   dependsOn?: string[]
+  role?: 'worker' | 'verifier' | string
+  repairRound?: number
   verificationCriteria?: string
+  expectedSections?: string[]
+  jsonSchema?: { required?: string[] }
   authority?: DelegationAuthority
   risk?: RoutingLevel
 }
@@ -68,9 +78,16 @@ export type RunSubagentsInput<TToolName extends string = string> = {
   recursiveContext?: SubagentRecursiveContext
 }
 
+export type SubagentWorkerUsage = {
+  cost?: number
+  tokens?: number
+  turns?: number
+}
+
 export type SubagentWorkerResult =
-  | { name: string; status: 'completed'; output: string; error?: never }
-  | { name: string; status: 'failed'; output: string; error: string }
+  | { name: string; status: 'completed'; output: string; error?: never; usage?: SubagentWorkerUsage }
+  | { name: string; status: 'failed'; output: string; error: string; usage?: SubagentWorkerUsage }
+  | { name: string; status: 'skipped'; output: string; error: string; usage?: SubagentWorkerUsage }
 
 export type SubagentWorkerUpdate = {
   stream: 'stdout' | 'stderr'
@@ -92,6 +109,7 @@ export type RunSubagentsResult = {
   workers: SubagentWorkerResult[]
   verification?: SubagentVerificationResult
   childRuns: RunSubagentsResult[]
+  trace: { runId: string; counts: Record<string, number>; durationMs: number }
   integrationHint: string
 }
 
